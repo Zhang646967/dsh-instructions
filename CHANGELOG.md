@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.0] - 2026-10-17
+
+### Added — F (gradual): self-built system-prompt channels
+- **额外全局来源**: `~/.dsh/instructions/extra-global.md`, injected as a host-level
+  system-prompt section alongside the official AGENTS.md message chain. Editable
+  from the Instruction panel (nav entry appears after the Host restart).
+- **本次会话临时指令**: per-session temporary rules stored under
+  `$DSH_HOME/storages/dsh-instructions/sessions/<sessionId>.md`, injected as an
+  agent-scoped system-prompt section that disappears with the agent. Edit it by
+  opening the panel from the session-header Instruction button.
+- These channels are user-authored content; project repository instructions stay
+  on the official message channel. Session instructions rank above extra-global,
+  and both are framed as not overriding system/developer/direct user instructions.
+- `getState().features` advertises the new capabilities so the client hides the
+  entries on older Host builds.
+
+
 ## [0.6.1] - 2026-10-17
 
 ### Fixed

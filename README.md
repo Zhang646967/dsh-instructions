@@ -23,6 +23,8 @@ DeepSeek Harness 桌面版插件：管理**全局**与**项目**两级 `AGENTS.m
 - **模板 / 片段**：内置回答风格、代码与测试、Git、安全、协作约定等模板，一键插入编辑器。
 - **多入口**：左侧栏面板、会话标题按钮之外，Settings → General 与新建会话 Hero 也提供入口。
 - **导入 / 导出**：全局 + 所有项目指令导出为 JSON 备份，也可按路径匹配恢复。
+- **额外全局来源（system prompt）**：`~/.dsh/instructions/extra-global.md`，作为宿主级 system prompt section 注入所有会话，与官方 AGENTS.md 消息链并存。
+- **本次会话临时指令（system prompt）**：从会话标题的 Instruction 按钮打开面板后可编辑，只对当前会话生效；存于 `$DSH_HOME/storages/dsh-instructions/sessions/<sessionId>.md`。
 - **自定义模板**：把当前内容存为本地模板（localStorage），随取随用。
 - **Markdown 预览 / 删除文件**：编辑器支持预览切换；可一键删除当前指令文件。
 - **渲染错误边界**：面板异常时显示错误信息，不影响其他会话。
@@ -53,6 +55,7 @@ DeepSeek Harness 桌面版插件：管理**全局**与**项目**两级 `AGENTS.m
 - **Agent 工具跟随会话沙箱**：`read-only` 会话会拒绝工具写入；`workspace-write` 只允许写会话工作区内的候选文件；全局指令对工具只读。界面编辑是用户操作，不受该沙箱限制。
 - **非原子写入**：直接覆盖写文件；外部编辑器同时修改时是最后写入者获胜。自动保存已串行化，但仍建议避免同时手改。
 - **指令是指导不是硬约束**：冲突依赖官方引擎“更具体优先”的提示语义；官方单会话预算 65536 字节，超出会先省略宽泛文件、可能截断最具体文件。
+- **两条注入通道并存**：AGENTS.md/项目文件走官方 user-message 链；额外全局与会话临时指令走自建 system prompt section（宿主级/Agent 级）。system prompt 通道只在 **v0.7+ Host 重启后**出现；项目仓库内容仍留在官方消息通道，避免把不可信仓库文本提升为系统级权威。
 - **提示注入风险**：项目内 `AGENTS.md` 来自仓库，属于不受信内容；不要在不信任的仓库里启用/注入未审阅的指令。
 - **本机安装形态**：当前以 `link:` 方式安装，移动/删除本仓库目录会让 profile 中的插件失效；分发时建议打包后安装。
 
@@ -70,6 +73,7 @@ Host 端测试使用 fake Cordis context 与临时目录，不会接触真实 pr
 
 ## 版本
 
+- `0.7.0`：F 渐进方案——额外全局来源与会话临时指令（system prompt section 注入）、能力探测与 UI 入口。
 - `0.6.1`：客户端向后兼容旧 Host（自动降级保存参数与返回形态，隐藏历史/冲突功能），刷新页面不再有保存失败风险。
 - `0.6.0`：自定义模板、删除指令文件、Markdown 预览、渲染错误边界；客户端 smoke test 接入 CI。
 - `0.5.0`：模板/片段、Settings 与新建会话入口、JSON 导入导出、工具 `validate` dry-run diff、CI 与 CHANGELOG。

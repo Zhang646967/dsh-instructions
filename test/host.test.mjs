@@ -68,6 +68,24 @@ try {
   ])
   const toolApi = { register: (definition) => (registered.tool = definition) || (() => {}) }
   const commandApi = { register: (definition) => (registered.command = definition) || (() => {}) }
+  const sections = []
+  const events = {}
+  const fakeSystemPrompt = {
+    section: (section) => {
+      sections.push(section)
+      return () => {
+        const index = sections.indexOf(section)
+        if (index >= 0) sections.splice(index, 1)
+      }
+    },
+  }
+  const fakeAgentCtx = {
+    get: (name) => (name === 'systemPrompt' ? fakeSystemPrompt : undefined),
+    effect: (callback) => {
+      const dispose = callback()
+      return typeof dispose === 'function' ? dispose : () => {}
+    },
+  }
   const baseCtx = {
     get(name) {
       if (name === 'workspaceRegistry') {
@@ -82,6 +100,7 @@ try {
       if (name === 'tools') return toolApi
       if (name === 'commands') return commandApi
       if (name === 'sandboxPolicy') return { resolve: () => ({ ...sandbox }) }
+      if (name === 'systemPrompt') return fakeSystemPrompt
       return undefined
     },
     provide(name, value) {
@@ -89,8 +108,25 @@ try {
     },
     inject(names, callback) {
       deferred.push(() =>
-        callback({ ...baseCtx, tools: toolApi, commands: commandApi, effect: (fn) => (fn(), () => {}) }),
+        callback({
+          ...baseCtx,
+          tools: toolApi,
+          commands: commandApi,
+          systemPrompt: fakeSystemPrompt,
+          on: (event, listener) => {
+            events[event] = listener
+            return () => {}
+          },
+          effect: (fn) => {
+            const dispose = fn()
+            return typeof dispose === 'function' ? dispose : () => {}
+          },
+        }),
       )
+    },
+    on(event, listener) {
+      events[event] = listener
+      return () => {}
     },
     fiber: {},
   }
@@ -188,6 +224,31 @@ try {
   sandbox.mode = 'workspace-write'
   const removedByTool = await registered.tool.execute({ action: 'remove' }, { agent: { id: 's1' } })
   assert.equal(removedByTool.exists, false)
+
+  // F gradual: self-built system-prompt channels.
+  assert.ok(Array.isArray((await api.getState()).features))
+  assert.ok((await api.getState()).features.includes('extraGlobal'))
+  const extraSection = sections.find((section) => section.name === 'instructions:extra-global')
+  assert.ok(extraSection, 'extra-global prompt section registered')
+  assert.equal(extraSection.text(), '')
+  await api.saveExtraGlobal('# extra global\n\n- be concise\n')
+  assert.match(extraSection.text(), /be concise/)
+  const clearedExtra = (await api.saveExtraGlobal('')).content
+  assert.equal(clearedExtra, '')
+  assert.equal(extraSection.text(), '')
+
+  const sessionInfoBefore = await api.getSessionInstruction('s1')
+  assert.equal(sessionInfoBefore.exists, false)
+  await sessions.get('s1').header // no-op: session object already exists
+  await events['agent/created']({ agent: { id: 's1', ctx: fakeAgentCtx } })
+  const sessionSection = sections.find((section) => section.name === 'instructions:session')
+  assert.ok(sessionSection, 'session prompt section registered per agent')
+  assert.equal(sessionSection.text(), '')
+  await api.saveSessionInstruction('s1', '# session only\n\n- answer briefly\n')
+  assert.match(sessionSection.text(), /answer briefly/)
+  const sessionInfoAfter = await api.getSessionInstruction('s1')
+  assert.equal(sessionInfoAfter.exists, true)
+  await assert.rejects(() => api.getSessionInstruction('bad id!'), /invalid session id/)
 
   // Command output mentions the injection chain.
   const commandResult = await registered.command.handler({

@@ -7,7 +7,7 @@
  * files that engine consumes (with history + stale-write protection), exposes
  * the editors to the Web UI, and offers an agent tool plus a human command.
  */
-import { promises as fsp } from 'node:fs'
+import { promises as fsp, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -21,6 +21,8 @@ const LOCAL_CANDIDATES = ['AGENTS.local.md', 'CLAUDE.local.md']
 /** Presets that mount the built-in agent-instructions engine (see dsh-web-app). */
 const ENGINE_PRESETS = new Set(['standard', 'ptc', 'cordis'])
 const HISTORY_LIMIT = 20
+const EXTRA_GLOBAL_FILE = 'extra-global.md'
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 
 function dshHome() {
   const fromEnv = process.env.DSH_HOME
@@ -219,6 +221,11 @@ export function apply(ctx) {
   const globalPath = path.join(home, 'AGENTS.md')
   const sharedGlobalPath = path.join(sharedHome, 'AGENTS.md')
   const historyRoot = path.join(home, 'storages', 'dsh-instructions', 'history')
+  const sessionRoot = path.join(home, 'storages', 'dsh-instructions', 'sessions')
+  const extraGlobalPath = path.join(home, 'instructions', EXTRA_GLOBAL_FILE)
+  const sessionCache = new Map()
+  const sessionDisposers = new Map()
+  let extraGlobalCache = { mtime: 0, size: 0, text: '' }
 
   const getSession = (sessionId) => {
     try {
@@ -397,6 +404,8 @@ export function apply(ctx) {
       home,
       sharedHome,
       historyLimit: HISTORY_LIMIT,
+      extraGlobalPath,
+      features: ['history', 'extraGlobal', 'sessionInstruction', 'validate'],
     }
   }
 
@@ -665,6 +674,97 @@ export function apply(ctx) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // F (gradual): self-built system-prompt channels
+  //   - extra global sources: $DSH_HOME/instructions/extra-global.md
+  //   - session temporary instructions: $DSH_HOME/storages/dsh-instructions/sessions/<id>.md
+  // These are user-authored additions on top of the official AGENTS.md engine.
+  // -------------------------------------------------------------------------
+  const buildExtraGlobalSection = () => {
+    try {
+      const stat = statSync(extraGlobalPath)
+      if (!stat.isFile() || stat.size === 0) {
+        extraGlobalCache = { mtime: 0, size: 0, text: '' }
+        return ''
+      }
+      if (extraGlobalCache.mtime === stat.mtimeMs && extraGlobalCache.size === stat.size) {
+        return extraGlobalCache.text
+      }
+      let body = readFileSync(extraGlobalPath, 'utf8')
+      if (Buffer.byteLength(body, 'utf8') > 32768) {
+        body = `${body.slice(0, 32768)}\n… (truncated by dsh-instructions)`
+      }
+      const text =
+        body.trim().length === 0
+          ? ''
+          : [
+              '以下是你（用户）在 Instruction 中维护的「额外全局前置指令」（system prompt 注入，与官方 AGENTS.md 全局链并存）。',
+              '冲突时以更具体或更近期的指令为准；它们不覆盖系统、开发者或直接用户指令。',
+              '',
+              body,
+            ].join('\n')
+      extraGlobalCache = { mtime: stat.mtimeMs, size: stat.size, text }
+      return text
+    } catch {
+      extraGlobalCache = { mtime: 0, size: 0, text: '' }
+      return ''
+    }
+  }
+
+  const buildSessionSection = (sessionId) => {
+    const raw = sessionCache.get(String(sessionId)) ?? ''
+    if (raw.trim().length === 0) return ''
+    return [
+      '以下是当前会话的临时前置指令（仅本次会话生效，优先级最高；不覆盖系统、开发者或直接用户指令）：',
+      '',
+      raw,
+    ].join('\n')
+  }
+
+  const sessionInstructionPath = (sessionId) => {
+    const id = String(sessionId ?? '')
+    if (!SESSION_ID_RE.test(id)) throw new Error(`invalid session id: ${id}`)
+    return path.join(sessionRoot, `${id}.md`)
+  }
+
+  const getExtraGlobal = async () => {
+    const info = await readFileInfo(extraGlobalPath)
+    return {
+      path: extraGlobalPath,
+      displayPath: '~/.dsh/instructions/extra-global.md',
+      exists: info.exists,
+      bytes: info.bytes,
+      mtime: info.mtime,
+      content: info.content,
+    }
+  }
+
+  const saveExtraGlobal = async (content) => {
+    await writeOrDeleteFile(extraGlobalPath, content)
+    extraGlobalCache = { mtime: 0, size: 0, text: '' }
+    return getExtraGlobal()
+  }
+
+  const getSessionInstruction = async (sessionId) => {
+    const target = sessionInstructionPath(sessionId)
+    const info = await readFileInfo(target)
+    sessionCache.set(String(sessionId), info.exists ? info.content : '')
+    return {
+      sessionId: String(sessionId),
+      path: target,
+      exists: info.exists,
+      bytes: info.bytes,
+      content: info.content,
+    }
+  }
+
+  const saveSessionInstruction = async (sessionId, content) => {
+    const target = sessionInstructionPath(sessionId)
+    await writeOrDeleteFile(target, content)
+    sessionCache.set(String(sessionId), content.trim().length === 0 ? '' : content)
+    return getSessionInstruction(sessionId)
+  }
+
   const api = {
     getState,
     readProject,
@@ -676,6 +776,10 @@ export function apply(ctx) {
     getSessionStatus,
     listHistory,
     restoreHistory: restoreHistorySnapshot,
+    getExtraGlobal,
+    saveExtraGlobal,
+    getSessionInstruction,
+    saveSessionInstruction,
   }
 
   // Typert gateway binding: a plain ctx.provide() value is invisible to the
@@ -690,6 +794,83 @@ export function apply(ctx) {
   })
 
   ctx.provide('instructions', api)
+
+  // -------------------------------------------------------------------------
+  // F (gradual): our own system-prompt channels, alongside the official
+  // message-based AGENTS.md engine.
+  //   1. extra global sources -> one host-level system-prompt section
+  //   2. session temporary instructions -> one section registered per Agent,
+  //      so it disappears when that Agent is disposed.
+  // -------------------------------------------------------------------------
+  ctx.inject(['systemPrompt'], (promptCtx) => {
+    promptCtx.effect(
+      () =>
+        promptCtx.systemPrompt.section({
+          name: 'instructions:extra-global',
+          order: 500,
+          interpolate: false,
+          text: () => buildExtraGlobalSection(),
+        }),
+      'instructions: extra global system-prompt section',
+    )
+
+    const registerSessionSection = (agent) => {
+      const sessionId = String(agent?.id ?? agent?.session?.id ?? '')
+      if (sessionId.length === 0) return
+      const agentCtx = agent?.ctx
+      const prompt = agentCtx?.get?.('systemPrompt')
+      if (prompt === undefined || typeof prompt.section !== 'function') return
+      const dispose = agentCtx.effect(
+        () =>
+          prompt.section({
+            name: 'instructions:session',
+            order: 510,
+            interpolate: false,
+            text: () => buildSessionSection(sessionId),
+          }),
+        'instructions: session system-prompt section',
+      )
+      sessionDisposers.set(sessionId, () => {
+        try {
+          dispose()
+        } catch {
+          /* ignore */
+        }
+      })
+    }
+
+    promptCtx.on('agent/created', async ({ agent }) => {
+      const sessionId = String(agent?.id ?? agent?.session?.id ?? '')
+      if (sessionId.length === 0) return
+      try {
+        const info = await readFileInfo(sessionInstructionPath(sessionId))
+        sessionCache.set(sessionId, info.exists ? info.content : '')
+      } catch {
+        sessionCache.set(sessionId, '')
+      }
+      registerSessionSection(agent)
+    })
+
+    promptCtx.on('agent/disposed', ({ agent }) => {
+      const sessionId = String(agent?.id ?? agent?.session?.id ?? '')
+      if (sessionId.length === 0) return
+      sessionCache.delete(sessionId)
+      const dispose = sessionDisposers.get(sessionId)
+      if (dispose !== undefined) {
+        dispose()
+        sessionDisposers.delete(sessionId)
+      }
+    })
+
+    promptCtx.effect(
+      () => () => {
+        for (const dispose of sessionDisposers.values()) dispose()
+        sessionDisposers.clear()
+      },
+      'instructions: session sections cleanup',
+    )
+  })
+
 
   // -------------------------------------------------------------------------
   // Agent tool: read/edit the workspace instruction chain from conversation.
@@ -858,6 +1039,14 @@ export function apply(ctx) {
         { full: true },
       )
       const status = getSessionStatus(invocation.agent?.id)
+      const extraGlobalInfo = await readFileInfo(extraGlobalPath)
+      let sessionInfo = { exists: false, bytes: 0 }
+      try {
+        const sessionId = String(invocation.agent?.id ?? '')
+        if (SESSION_ID_RE.test(sessionId)) sessionInfo = await readFileInfo(sessionInstructionPath(sessionId))
+      } catch {
+        /* ignore */
+      }
       const mode = String(invocation.rawInput ?? '').trim().toLowerCase() || 'show'
       if (mode === 'global') {
         const info = await readFileInfo(globalPath)
@@ -882,6 +1071,8 @@ export function apply(ctx) {
         status.found
           ? `已注入: ${status.files.length} 个文件 · ${status.totalBytes} bytes · ${status.messages} 条注入消息`
           : '已注入: 会话状态不可读（冷会话或未开始）',
+        extraGlobalInfo.exists ? `额外全局（system prompt）: ${extraGlobalInfo.bytes} bytes` : '额外全局（system prompt）: 未创建',
+        sessionInfo.exists ? `会话临时（system prompt）: ${sessionInfo.bytes} bytes` : '会话临时（system prompt）: 未设置',
         '',
         '生效链（越靠下优先级越高）:',
         ...state.chain.map((entry, index) => `${index + 1}. [${entry.scope}] ${entry.displayPath} (${entry.bytes} B)`),

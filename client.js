@@ -53,6 +53,10 @@ window.__ModuleLoader__.load({
         descriptor('getSessionStatus', ['sessionId']),
         descriptor('listHistory', ['workspaceId', 'filePath']),
         descriptor('restoreHistory', ['workspaceId', 'filePath', 'snapshotId']),
+        descriptor('getExtraGlobal'),
+        descriptor('saveExtraGlobal', ['content']),
+        descriptor('getSessionInstruction', ['sessionId']),
+        descriptor('saveSessionInstruction', ['sessionId', 'content']),
       ],
     }
 
@@ -122,6 +126,26 @@ window.__ModuleLoader__.load({
         engineOff: '未启用',
         sessionFiles: '个文件',
         sessionUnknown: '会话状态不可读',
+        extraGlobal: '额外全局来源',
+        extraGlobalHint: '保存到 ~/.dsh/instructions/extra-global.md，作为 system prompt 注入所有会话（与 AGENTS.md 并存）。',
+        sessionInstruction: '本次会话临时指令',
+        sessionInstructionHint: '仅对当前会话生效的临时规则，不写入仓库；通过 system prompt 注入。',
+        sessionInstructionNoSession: '请从会话标题旁的 Instruction 按钮打开面板，才能编辑本次会话的临时指令。',
+        previewLabelExtraGlobal: '额外全局 · system prompt',
+        previewLabelSession: '会话临时 · system prompt',
+        sessionTempSet: '已设置会话临时指令',
+        sessionTempUnset: '未设置会话临时指令',
+        hostFeatureOutdatedWarn: 'Host 端还没有 v0.7 的 system prompt 渠道：额外全局/会话临时指令需在下次重启 App 后启用。',
+        extraGlobal: 'Extra global sources',
+        extraGlobalHint: 'Stored in ~/.dsh/instructions/extra-global.md and injected as a system prompt for every session (alongside AGENTS.md).',
+        sessionInstruction: 'This session only',
+        sessionInstructionHint: 'Temporary rules for the current session; not written to the repository. Injected as a system prompt.',
+        sessionInstructionNoSession: 'Open the panel from the session-header Instruction button to edit this session’s temporary instructions.',
+        previewLabelExtraGlobal: 'Extra global · system prompt',
+        previewLabelSession: 'Session temporary · system prompt',
+        sessionTempSet: 'Session temporary instructions set',
+        sessionTempUnset: 'No session temporary instructions',
+        hostFeatureOutdatedWarn: 'The Host does not provide the v0.7 system-prompt channels yet: extra-global/session instructions activate after the next app restart.',
         hostOutdatedWarn: '检测到 Host 端仍是旧版本：历史/冲突保护需在下次重启 App 后启用；当前编辑与保存已自动兼容旧接口。',
         history: '历史',
         historyTitle: '保存历史',
@@ -700,6 +724,9 @@ window.__ModuleLoader__.load({
       })
       const [previewMode, setPreviewMode] = useState(false)
       const [hostV4, setHostV4] = useState(true)
+      const [hostFeatures, setHostFeatures] = useState([])
+      const [extraGlobal, setExtraGlobal] = useState(null)
+      const [sessionInstruction, setSessionInstruction] = useState(null)
       const [exporting, setExporting] = useState(false)
       const [importing, setImporting] = useState(false)
       const importInputRef = React.useRef(null)
@@ -798,6 +825,24 @@ window.__ModuleLoader__.load({
         [loadChainContents],
       )
 
+      const loadSideChannels = useCallback(async (features, wantedSession) => {
+        const list = Array.isArray(features) ? features : []
+        if (list.includes('extraGlobal')) {
+          try {
+            setExtraGlobal(await unwrap(API.getExtraGlobal()))
+          } catch (error) {
+            console.warn('[dsh-instructions] cannot read extra-global source', error)
+          }
+        }
+        if (list.includes('sessionInstruction') && wantedSession) {
+          try {
+            setSessionInstruction(await unwrap(API.getSessionInstruction(String(wantedSession))))
+          } catch (error) {
+            console.warn('[dsh-instructions] cannot read session instructions', error)
+          }
+        }
+      }, [])
+
       const boot = useCallback(async () => {
         setStatus('loading')
         setErrorText('')
@@ -817,16 +862,19 @@ window.__ModuleLoader__.load({
             applyGlobal(next)
           }
           setHostV4(typeof next.historyLimit === 'number')
+          const features = Array.isArray(next.features) ? next.features : []
+          setHostFeatures(features)
           if (wantedSession !== null) {
             setSessionId(String(wantedSession))
             await fetchSessionStatus(wantedSession)
           }
+          await loadSideChannels(features, wantedSession)
           setStatus('ready')
         } catch (error) {
           setStatus('error')
           setErrorText(String(error?.message ?? error))
         }
-      }, [applyGlobal, loadProject, fetchSessionStatus])
+      }, [applyGlobal, loadProject, fetchSessionStatus, loadSideChannels])
 
       useEffect(() => {
         let cancelled = false
@@ -855,6 +903,23 @@ window.__ModuleLoader__.load({
           setSaving(true)
           setNotice(null)
           try {
+            if (active.kind === 'extra-global') {
+              const data = await unwrap(API.saveExtraGlobal(draft))
+              setExtraGlobal(data)
+              setOriginal(draft)
+              setLastSavedAt(Date.now())
+              setNotice({ kind: 'ok', text: mode === 'auto' ? tr('autoSaved') : tr('saved') })
+              return true
+            }
+            if (active.kind === 'session') {
+              if (sessionId === null) throw new Error(tr('sessionInstructionNoSession'))
+              const data = await unwrap(API.saveSessionInstruction(String(sessionId), draft))
+              setSessionInstruction(data)
+              setOriginal(draft)
+              setLastSavedAt(Date.now())
+              setNotice({ kind: 'ok', text: mode === 'auto' ? tr('autoSaved') : tr('saved') })
+              return true
+            }
             let result
             if (active.kind === 'project' && typeof active.id === 'string') {
               if (editingPath !== null) {
@@ -1061,6 +1126,7 @@ window.__ModuleLoader__.load({
             applyGlobal(next)
           }
           if (sessionId !== null) await fetchSessionStatus(sessionId)
+          await loadSideChannels(hostFeatures, sessionId)
           setStatus('ready')
         } catch (error) {
           setStatus('error')
@@ -1115,6 +1181,52 @@ window.__ModuleLoader__.load({
           setConflict(null)
           setHistoryOpen(false)
           setPreviewMode(false)
+          setNotice(null)
+        } catch (error) {
+          setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        }
+      }
+
+      const loadExtraGlobal = async () => {
+        if (!(await flush())) return
+        try {
+          const data = await unwrap(API.getExtraGlobal())
+          setExtraGlobal(data)
+          setActive({ kind: 'extra-global' })
+          setProject(null)
+          setEditingPath(null)
+          setHistoryOpen(false)
+          setTemplatesOpen(false)
+          setPreviewMode(false)
+          setConflict(null)
+          setDraft(data.content ?? '')
+          setOriginal(data.content ?? '')
+          setOriginalHash('')
+          setNotice(null)
+        } catch (error) {
+          setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        }
+      }
+
+      const loadSessionInstruction = async () => {
+        if (!(await flush())) return
+        if (sessionId === null) {
+          setNotice({ kind: 'error', text: tr('sessionInstructionNoSession') })
+          return
+        }
+        try {
+          const data = await unwrap(API.getSessionInstruction(String(sessionId)))
+          setSessionInstruction(data)
+          setActive({ kind: 'session' })
+          setProject(null)
+          setEditingPath(null)
+          setHistoryOpen(false)
+          setTemplatesOpen(false)
+          setPreviewMode(false)
+          setConflict(null)
+          setDraft(data.content ?? '')
+          setOriginal(data.content ?? '')
+          setOriginalHash('')
           setNotice(null)
         } catch (error) {
           setNotice({ kind: 'error', text: String(error?.message ?? error) })
@@ -1330,6 +1442,25 @@ window.__ModuleLoader__.load({
         setSaving(true)
         setNotice(null)
         try {
+          if (active.kind === 'extra-global') {
+            const data = await unwrap(API.saveExtraGlobal(''))
+            setExtraGlobal(data)
+            setDraft('')
+            setOriginal('')
+            setLastSavedAt(Date.now())
+            setNotice({ kind: 'ok', text: tr('deleted') })
+            return
+          }
+          if (active.kind === 'session') {
+            if (sessionId === null) throw new Error(tr('sessionInstructionNoSession'))
+            const data = await unwrap(API.saveSessionInstruction(String(sessionId), ''))
+            setSessionInstruction(data)
+            setDraft('')
+            setOriginal('')
+            setLastSavedAt(Date.now())
+            setNotice({ kind: 'ok', text: tr('deleted') })
+            return
+          }
           let result
           if (active.kind === 'project' && typeof active.id === 'string') {
             if (editingPath !== null) {
@@ -1456,6 +1587,8 @@ window.__ModuleLoader__.load({
         return nodes
       }
 
+      const supportsExtra = Array.isArray(hostFeatures) && hostFeatures.includes('extraGlobal')
+      const supportsSession = Array.isArray(hostFeatures) && hostFeatures.includes('sessionInstruction')
       const projects = state?.projects ?? []
       const globalInfo = state?.global ?? null
       const globalSavedContent = globalInfo?.content ?? ''
@@ -1549,6 +1682,10 @@ window.__ModuleLoader__.load({
         if (globalText.trim().length > 0) {
           blocks.push({ label: `${tr('previewLabelGlobal')} · ~/.dsh/AGENTS.md`, text: globalText })
         }
+        const extraText = active.kind === 'extra-global' ? draft : extraGlobal?.content ?? ''
+        if (extraText.trim().length > 0) {
+          blocks.push({ label: `${tr('previewLabelExtraGlobal')} · ${extraGlobal?.path ?? ''}`, text: extraText })
+        }
         if (active.kind === 'project' && project !== null) {
           for (const entry of projectChain) {
             const text =
@@ -1557,6 +1694,10 @@ window.__ModuleLoader__.load({
               blocks.push({ label: `${tr('scopeProject')} · ${entry.displayPath}`, text })
             }
           }
+        }
+        const sessionText = active.kind === 'session' ? draft : sessionInstruction?.content ?? ''
+        if (sessionText.trim().length > 0) {
+          blocks.push({ label: tr('previewLabelSession'), text: sessionText })
         }
         return blocks
       }
@@ -1643,6 +1784,13 @@ window.__ModuleLoader__.load({
                   sessionStatus.baseline ? tr('baselineOn') : tr('baselineOff')
                 }`,
               ),
+              supportsSession
+                ? h(
+                    'p',
+                    { className: 'dwi-hint' },
+                    sessionInstruction?.exists ? tr('sessionTempSet') : tr('sessionTempUnset'),
+                  )
+                : null,
             ),
             h(
               'span',
@@ -1846,6 +1994,87 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'dwi-banner warn' }, tr('engineInactiveWarn'))
           : null
 
+      const simpleEditorMain = (options) =>
+        h(
+          'section',
+          { className: 'dwi-main' },
+          engineBanner,
+          hostV4 ? null : h('div', { className: 'dwi-banner warn' }, tr('hostOutdatedWarn')),
+          hostV4 && !supportsExtra && !supportsSession
+            ? h('div', { className: 'dwi-banner warn' }, tr('hostFeatureOutdatedWarn'))
+            : null,
+          sessionCard(),
+          conflictBanner,
+          h(
+            'div',
+            { className: 'dwi-card' },
+            h(
+              'div',
+              { className: 'dwi-card-head' },
+              h(
+                'div',
+                null,
+                h('h2', { className: 'dwi-card-title' }, options.title),
+                h('p', { className: 'dwi-hint' }, options.hint),
+                options.path ? h('p', { className: 'dwi-hint' }, options.path) : null,
+              ),
+              h(
+                'div',
+                { className: 'dwi-head-actions' },
+                h(
+                  'button',
+                  { type: 'button', className: 'dwi-btn small', onClick: () => setPreviewMode((value) => !value) },
+                  previewMode ? tr('editMode') : tr('preview'),
+                ),
+                options.exists
+                  ? h(
+                      'button',
+                      { type: 'button', className: 'dwi-btn small danger', onClick: deleteCurrentFile },
+                      tr('deleteFile'),
+                    )
+                  : null,
+                h(
+                  'button',
+                  { type: 'button', className: 'dwi-btn small', onClick: () => setTemplatesOpen((value) => !value) },
+                  tr('templates'),
+                ),
+                h(
+                  'span',
+                  { className: 'dwi-badge' + (options.exists ? '' : ' muted') },
+                  options.exists ? tr('injectedBadge') : tr('notInjectedBadge'),
+                ),
+              ),
+            ),
+            options.path ? pathRow(tr('path'), options.path, 'simple-path') : null,
+            previewMode
+              ? h(
+                  'div',
+                  { className: 'dwi-md' },
+                  draft.trim().length === 0
+                    ? h('p', { className: 'dwi-hint' }, tr('previewEmpty'))
+                    : renderMarkdown(draft),
+                )
+              : h('textarea', {
+                  className: 'dwi-editor',
+                  value: draft,
+                  placeholder: options.placeholder,
+                  spellCheck: false,
+                  onChange: (event) => {
+                    setDraft(event.target.value)
+                    setNotice(null)
+                  },
+                  onKeyDown: onEditorKeyDown,
+                }),
+            editorFooter(
+              `${draft.length} ${tr('chars')} · ${formatBytes(byteLength(draft))} · ${tr('tokenEstimate')} ≈ ${estimateTokens(
+                draft,
+              )} tokens`,
+            ),
+          ),
+          templatesCard,
+          injectionCard(),
+        )
+
       const nav = h(
         'aside',
         { className: 'dwi-nav' },
@@ -1866,6 +2095,44 @@ window.__ModuleLoader__.load({
               : tr('notInjectedBadge'),
           ),
         ),
+        supportsExtra
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'dwi-nav-item' + (active.kind === 'extra-global' ? ' active' : ''),
+                onClick: loadExtraGlobal,
+              },
+              h('span', { className: 'dwi-nav-title' }, tr('extraGlobal')),
+              h('span', { className: 'dwi-nav-path' }, '~/.dsh/instructions/extra-global.md'),
+              h(
+                'span',
+                { className: 'dwi-nav-meta' },
+                extraGlobal?.exists
+                  ? `${formatBytes(extraGlobal.bytes)} · system prompt`
+                  : tr('notCreated'),
+              ),
+            )
+          : null,
+        supportsSession && sessionId !== null
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'dwi-nav-item' + (active.kind === 'session' ? ' active' : ''),
+                onClick: loadSessionInstruction,
+              },
+              h('span', { className: 'dwi-nav-title' }, tr('sessionInstruction')),
+              h('span', { className: 'dwi-nav-path' }, String(sessionId).slice(0, 18)),
+              h(
+                'span',
+                { className: 'dwi-nav-meta' },
+                sessionInstruction?.exists
+                  ? `${formatBytes(sessionInstruction.bytes)} · system prompt`
+                  : tr('notCreated'),
+              ),
+            )
+          : null,
         h('div', { className: 'dwi-nav-heading' }, tr('projects')),
         h('input', {
           className: 'dwi-search',
@@ -1929,6 +2196,9 @@ window.__ModuleLoader__.load({
           { className: 'dwi-main' },
           engineBanner,
           hostV4 ? null : h('div', { className: 'dwi-banner warn' }, tr('hostOutdatedWarn')),
+          hostV4 && !supportsExtra && !supportsSession
+            ? h('div', { className: 'dwi-banner warn' }, tr('hostFeatureOutdatedWarn'))
+            : null,
           sessionCard(),
           conflictBanner,
           globalInfo?.exists !== true ? h('div', { className: 'dwi-banner warn' }, tr('globalMissingWarn')) : null,
@@ -2013,6 +2283,22 @@ window.__ModuleLoader__.load({
               )
             : null,
         )
+      } else if (active.kind === 'extra-global') {
+        main = simpleEditorMain({
+          title: tr('extraGlobal'),
+          hint: tr('extraGlobalHint'),
+          path: extraGlobal?.path ?? '~/.dsh/instructions/extra-global.md',
+          exists: extraGlobal?.exists === true,
+          placeholder: tr('globalPlaceholder'),
+        })
+      } else if (active.kind === 'session') {
+        main = simpleEditorMain({
+          title: tr('sessionInstruction'),
+          hint: tr('sessionInstructionHint'),
+          path: sessionInstruction?.path ?? '',
+          exists: sessionInstruction?.exists === true,
+          placeholder: tr('globalPlaceholder'),
+        })
       } else if (project === null) {
         main = h('section', { className: 'dwi-main' }, h('p', { className: 'dwi-empty' }, tr('loading')))
       } else {
@@ -2021,6 +2307,9 @@ window.__ModuleLoader__.load({
           { className: 'dwi-main' },
           engineBanner,
           hostV4 ? null : h('div', { className: 'dwi-banner warn' }, tr('hostOutdatedWarn')),
+          hostV4 && !supportsExtra && !supportsSession
+            ? h('div', { className: 'dwi-banner warn' }, tr('hostFeatureOutdatedWarn'))
+            : null,
           sessionCard(),
           conflictBanner,
           currentFileExists ? null : h('div', { className: 'dwi-banner warn' }, tr('projectMissingWarn')),

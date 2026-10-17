@@ -57,6 +57,10 @@ export const TYPERT = {
     invocation('getSessionStatus', ['sessionId']),
     invocation('listHistory', ['workspaceId', 'filePath']),
     invocation('restoreHistory', ['workspaceId', 'filePath', 'snapshotId']),
+    invocation('getExtraGlobal'),
+    invocation('saveExtraGlobal', ['content']),
+    invocation('getSessionInstruction', ['sessionId']),
+    invocation('saveSessionInstruction', ['sessionId', 'content']),
   ],
   model: {
     services: [
@@ -116,6 +120,26 @@ export const TYPERT = {
             name: 'restoreHistory',
             signature:
               'restoreHistory(workspaceId: string, filePath: string, snapshotId: string): Promise<HistoryRestore>',
+          },
+          {
+            kind: 'method',
+            name: 'getExtraGlobal',
+            signature: 'getExtraGlobal(): Promise<ExtraGlobalSource>',
+          },
+          {
+            kind: 'method',
+            name: 'saveExtraGlobal',
+            signature: 'saveExtraGlobal(content: string): Promise<ExtraGlobalSource>',
+          },
+          {
+            kind: 'method',
+            name: 'getSessionInstruction',
+            signature: 'getSessionInstruction(sessionId: string): Promise<SessionInstruction>',
+          },
+          {
+            kind: 'method',
+            name: 'saveSessionInstruction',
+            signature: 'saveSessionInstruction(sessionId: string, content: string): Promise<SessionInstruction>',
           },
         ],
         types: [],
