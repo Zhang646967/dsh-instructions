@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1] - 2026-10-17
+
+### Fixed
+- Client is now compatible with the previous Host build: it detects a missing
+  `historyLimit` capability, uses the old save arguments/return shape, and hides
+  history/conflict features until the next app restart. Refreshing the page no
+  longer risks failed saves while another session keeps the old process alive.
+
+
 ## [0.6.0] - 2026-10-17
 
 ### Added

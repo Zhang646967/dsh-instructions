@@ -34,7 +34,10 @@ window.__ModuleLoader__.load({
       namespace: 'instructions',
       method,
       invocation: { kind: 'direct' },
-      parameters: parameters.map(stringParameter),
+      parameters: parameters.map((spec) => {
+        if (typeof spec === 'string') return stringParameter(spec)
+        return { ...stringParameter(spec.name), acceptsUndefined: spec.optional === true }
+      }),
       result: resultCodec(method),
     })
     const FACE = {
@@ -42,11 +45,11 @@ window.__ModuleLoader__.load({
       descriptors: [
         descriptor('getState'),
         descriptor('readProject', ['workspaceId']),
-        descriptor('saveGlobal', ['content', 'baseHash']),
-        descriptor('saveProject', ['workspaceId', 'content', 'baseHash']),
+        descriptor('saveGlobal', ['content', { name: 'baseHash', optional: true }]),
+        descriptor('saveProject', ['workspaceId', 'content', { name: 'baseHash', optional: true }]),
         descriptor('findWorkspaceForSession', ['sessionId']),
         descriptor('readFile', ['workspaceId', 'filePath']),
-        descriptor('saveFile', ['workspaceId', 'filePath', 'content', 'baseHash']),
+        descriptor('saveFile', ['workspaceId', 'filePath', 'content', { name: 'baseHash', optional: true }]),
         descriptor('getSessionStatus', ['sessionId']),
         descriptor('listHistory', ['workspaceId', 'filePath']),
         descriptor('restoreHistory', ['workspaceId', 'filePath', 'snapshotId']),
@@ -119,6 +122,7 @@ window.__ModuleLoader__.load({
         engineOff: '未启用',
         sessionFiles: '个文件',
         sessionUnknown: '会话状态不可读',
+        hostOutdatedWarn: '检测到 Host 端仍是旧版本：历史/冲突保护需在下次重启 App 后启用；当前编辑与保存已自动兼容旧接口。',
         history: '历史',
         historyTitle: '保存历史',
         historyHint: '每次保存前自动归档上一版，最多保留 20 份。恢复时会先归档当前内容。',
@@ -252,6 +256,7 @@ window.__ModuleLoader__.load({
         engineOff: 'not enabled',
         sessionFiles: 'files',
         sessionUnknown: 'Session state unavailable',
+        hostOutdatedWarn: 'The Host is still an older build: history/conflict protection activates after the next app restart. Editing and saving remain compatible with the old API.',
         history: 'History',
         historyTitle: 'Save history',
         historyHint: 'The previous version is archived before every save (up to 20 kept). Restoring archives the current content first.',
@@ -694,6 +699,7 @@ window.__ModuleLoader__.load({
         return []
       })
       const [previewMode, setPreviewMode] = useState(false)
+      const [hostV4, setHostV4] = useState(true)
       const [exporting, setExporting] = useState(false)
       const [importing, setImporting] = useState(false)
       const importInputRef = React.useRef(null)
@@ -810,6 +816,7 @@ window.__ModuleLoader__.load({
           } else {
             applyGlobal(next)
           }
+          setHostV4(typeof next.historyLimit === 'number')
           if (wantedSession !== null) {
             setSessionId(String(wantedSession))
             await fetchSessionStatus(wantedSession)
@@ -833,22 +840,43 @@ window.__ModuleLoader__.load({
         }
       }, [boot])
 
+      const normalizeSaveResult = (result, kind) => {
+        if (result !== null && typeof result === 'object' && 'stale' in result) return result
+        if (kind === 'global') return { stale: false, global: result }
+        if (kind === 'project') return { stale: false, project: result }
+        return { stale: false, file: result?.file, project: result?.project }
+      }
+
       const save = useCallback(
         async (mode, options = {}) => {
           if (!API || saving || !dirty) return false
-          if (conflict !== null && options.force !== true) return false
+          if (hostV4 && conflict !== null && options.force !== true) return false
           const baseHash = options.force === true ? '' : originalHash
           setSaving(true)
           setNotice(null)
           try {
             let result
             if (active.kind === 'project' && typeof active.id === 'string') {
-              result =
-                editingPath !== null
-                  ? await unwrap(API.saveFile(active.id, editingPath, draft, baseHash))
-                  : await unwrap(API.saveProject(active.id, draft, baseHash))
+              if (editingPath !== null) {
+                result = normalizeSaveResult(
+                  await unwrap(
+                    hostV4
+                      ? API.saveFile(active.id, editingPath, draft, baseHash)
+                      : API.saveFile(active.id, editingPath, draft),
+                  ),
+                  'file',
+                )
+              } else {
+                result = normalizeSaveResult(
+                  await unwrap(hostV4 ? API.saveProject(active.id, draft, baseHash) : API.saveProject(active.id, draft)),
+                  'project',
+                )
+              }
             } else {
-              result = await unwrap(API.saveGlobal(draft, baseHash))
+              result = normalizeSaveResult(
+                await unwrap(hostV4 ? API.saveGlobal(draft, baseHash) : API.saveGlobal(draft)),
+                'global',
+              )
             }
             if (result !== null && typeof result === 'object' && result.stale === true) {
               setConflict({ current: result.current ?? null })
@@ -917,6 +945,7 @@ window.__ModuleLoader__.load({
           loadChainContents,
           originalHash,
           conflict,
+          hostV4,
         ],
       )
       saveRef.current = save
@@ -935,7 +964,7 @@ window.__ModuleLoader__.load({
       // Detect external edits when the window regains focus.
       useEffect(() => {
         const onFocus = () => {
-          if (status !== 'ready' || saving) return
+          if (!hostV4 || status !== 'ready' || saving) return
           ;(async () => {
             try {
               if (active.kind === 'global') {
@@ -1001,6 +1030,7 @@ window.__ModuleLoader__.load({
         sessionId,
         fetchSessionStatus,
         loadChainContents,
+        hostV4,
       ])
 
       const flush = async () => {
@@ -1123,6 +1153,10 @@ window.__ModuleLoader__.load({
       }
 
       const openHistory = async () => {
+        if (!hostV4) {
+          setNotice({ kind: 'error', text: tr('hostOutdatedWarn') })
+          return
+        }
         setHistoryOpen(true)
         await refreshHistory()
       }
@@ -1298,12 +1332,26 @@ window.__ModuleLoader__.load({
         try {
           let result
           if (active.kind === 'project' && typeof active.id === 'string') {
-            result =
-              editingPath !== null
-                ? await unwrap(API.saveFile(active.id, editingPath, '', originalHash))
-                : await unwrap(API.saveProject(active.id, '', originalHash))
+            if (editingPath !== null) {
+              result = normalizeSaveResult(
+                await unwrap(
+                  hostV4
+                    ? API.saveFile(active.id, editingPath, '', originalHash)
+                    : API.saveFile(active.id, editingPath, ''),
+                ),
+                'file',
+              )
+            } else {
+              result = normalizeSaveResult(
+                await unwrap(hostV4 ? API.saveProject(active.id, '', originalHash) : API.saveProject(active.id, '')),
+                'project',
+              )
+            }
           } else {
-            result = await unwrap(API.saveGlobal('', originalHash))
+            result = normalizeSaveResult(
+              await unwrap(hostV4 ? API.saveGlobal('', originalHash) : API.saveGlobal('')),
+              'global',
+            )
           }
           if (result !== null && typeof result === 'object' && result.stale === true) {
             setConflict({ current: result.current ?? null })
@@ -1617,7 +1665,7 @@ window.__ModuleLoader__.load({
       }
 
       const conflictBanner =
-        conflict !== null
+        conflict !== null && hostV4
           ? h(
               'div',
               { className: 'dwi-banner warn dwi-conflict' },
@@ -1645,7 +1693,7 @@ window.__ModuleLoader__.load({
           : null
 
       const historyCard =
-        historyOpen
+        historyOpen && hostV4
           ? h(
               'div',
               { className: 'dwi-card' },
@@ -1880,6 +1928,7 @@ window.__ModuleLoader__.load({
           'section',
           { className: 'dwi-main' },
           engineBanner,
+          hostV4 ? null : h('div', { className: 'dwi-banner warn' }, tr('hostOutdatedWarn')),
           sessionCard(),
           conflictBanner,
           globalInfo?.exists !== true ? h('div', { className: 'dwi-banner warn' }, tr('globalMissingWarn')) : null,
@@ -1915,7 +1964,9 @@ window.__ModuleLoader__.load({
                   { type: 'button', className: 'dwi-btn small', onClick: () => setTemplatesOpen((value) => !value) },
                   tr('templates'),
                 ),
-                h('button', { type: 'button', className: 'dwi-btn small', onClick: openHistory }, tr('history')),
+                hostV4
+                  ? h('button', { type: 'button', className: 'dwi-btn small', onClick: openHistory }, tr('history'))
+                  : null,
                 h(
                   'span',
                   { className: 'dwi-badge' + (globalInfo?.exists ? '' : ' muted') },
@@ -1969,6 +2020,7 @@ window.__ModuleLoader__.load({
           'section',
           { className: 'dwi-main' },
           engineBanner,
+          hostV4 ? null : h('div', { className: 'dwi-banner warn' }, tr('hostOutdatedWarn')),
           sessionCard(),
           conflictBanner,
           currentFileExists ? null : h('div', { className: 'dwi-banner warn' }, tr('projectMissingWarn')),
@@ -2023,7 +2075,9 @@ window.__ModuleLoader__.load({
                   { type: 'button', className: 'dwi-btn small', onClick: () => setTemplatesOpen((value) => !value) },
                   tr('templates'),
                 ),
-                h('button', { type: 'button', className: 'dwi-btn small', onClick: openHistory }, tr('history')),
+                hostV4
+                  ? h('button', { type: 'button', className: 'dwi-btn small', onClick: openHistory }, tr('history'))
+                  : null,
                 h(
                   'span',
                   { className: 'dwi-badge' + (currentFileExists ? '' : ' muted') },
