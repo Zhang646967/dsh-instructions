@@ -38,6 +38,14 @@ DeepSeek Harness 桌面版插件：管理**全局**与**项目**两级 `AGENTS.m
    git clone https://github.com/Zhang646967/dsh-instructions.git
    ```
 2. 在桌面版打开 **Plugins → Add plugin → 选择本地目录**，选中仓库目录；或使用 CLI：`dsh plugin --profile desktop add <仓库绝对路径>`。
+
+### 从 npm 安装
+
+```bash
+dsh plugin --profile desktop add dsh-instructions
+```
+
+或在 **Plugins → Add plugin** 中输入 `dsh-instructions`。
 3. 重启 DeepSeek Harness（Host 侧代码只在进程启动时加载）；之后仅客户端改动刷新页面即可。
 
 > 后续如果只改 UI/文案，刷新页面即可；改动 Host 侧代码（`index.js` / `typert.host.js`）需要重启 App。
@@ -73,6 +81,7 @@ Host 端测试使用 fake Cordis context 与临时目录，不会接触真实 pr
 
 ## 版本
 
+- `0.8.0`：界面美化、路径以 `~` 友好显示、额外全局指令文案澄清；正式发布到 npm。
 - `0.7.0`：F 渐进方案——额外全局来源与会话临时指令（system prompt section 注入）、能力探测与 UI 入口。
 - `0.6.1`：客户端向后兼容旧 Host（自动降级保存参数与返回形态，隐藏历史/冲突功能），刷新页面不再有保存失败风险。
 - `0.6.0`：自定义模板、删除指令文件、Markdown 预览、渲染错误边界；客户端 smoke test 接入 CI。

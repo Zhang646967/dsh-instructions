@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0] - 2026-10-17
+
+### Changed
+- Visual polish: card/nav spacing, chips header, status dot for auto-save, hover/focus
+  states, scrollbars, compact action row.
+- File paths are displayed with `~` when they live under the home directory (copy
+  still copies the absolute path), so the UI is not tied to one machine's spelling.
+- "额外全局来源" renamed/clarified to "额外全局指令" with a clearer description.
+
+### Published
+- First official npm release as `dsh-instructions`.
+
+
 ## [0.7.0] - 2026-10-17
 
 ### Added — F (gradual): self-built system-prompt channels

@@ -1,7 +1,6 @@
 {
   "name": "dsh-instructions",
-  "version": "0.7.0",
-  "private": true,
+  "version": "0.8.0",
   "type": "module",
   "description": "前置指令管理：编辑全局与项目 AGENTS.md，桌面版官方注入引擎自动读取",
   "exports": {
@@ -47,7 +46,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test/host.test.mjs && node test/client-load.test.mjs"
+    "test": "node test/host.test.mjs && node test/client-load.test.mjs",
+    "prepublishOnly": "node test/host.test.mjs && node test/client-load.test.mjs"
   },
   "license": "MIT",
   "repository": {
@@ -57,5 +57,8 @@
   "homepage": "https://github.com/Zhang646967/dsh-instructions#readme",
   "bugs": {
     "url": "https://github.com/Zhang646967/dsh-instructions/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

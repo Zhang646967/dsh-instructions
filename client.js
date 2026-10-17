@@ -126,8 +126,13 @@ window.__ModuleLoader__.load({
         engineOff: '未启用',
         sessionFiles: '个文件',
         sessionUnknown: '会话状态不可读',
-        extraGlobal: '额外全局来源',
-        extraGlobalHint: '保存到 ~/.dsh/instructions/extra-global.md，作为 system prompt 注入所有会话（与 AGENTS.md 并存）。',
+        extraGlobal: '额外全局指令',
+        chipEngine: '官方 AGENTS.md 引擎',
+        chipSystemPrompt: 'system prompt 通道',
+        chipBudget: '64 KB 预算',
+        systemPromptTag: 'system prompt',
+        extraGlobalHint:
+          '以 system prompt 注入所有会话的额外全局规则；保存在 ~/.dsh/instructions/extra-global.md，不依赖任何项目，适合放你个人跨项目的补充约定。',
         sessionInstruction: '本次会话临时指令',
         sessionInstructionHint: '仅对当前会话生效的临时规则，不写入仓库；通过 system prompt 注入。',
         sessionInstructionNoSession: '请从会话标题旁的 Instruction 按钮打开面板，才能编辑本次会话的临时指令。',
@@ -136,8 +141,13 @@ window.__ModuleLoader__.load({
         sessionTempSet: '已设置会话临时指令',
         sessionTempUnset: '未设置会话临时指令',
         hostFeatureOutdatedWarn: 'Host 端还没有 v0.7 的 system prompt 渠道：额外全局/会话临时指令需在下次重启 App 后启用。',
-        extraGlobal: 'Extra global sources',
-        extraGlobalHint: 'Stored in ~/.dsh/instructions/extra-global.md and injected as a system prompt for every session (alongside AGENTS.md).',
+        chipEngine: 'Official AGENTS.md engine',
+        chipSystemPrompt: 'system-prompt channel',
+        chipBudget: '64 KB budget',
+        systemPromptTag: 'system prompt',
+        extraGlobal: 'Extra global instructions',
+        extraGlobalHint:
+          'Extra global rules injected as a system prompt for every session; stored in ~/.dsh/instructions/extra-global.md, independent of any project. Useful for personal cross-project conventions.',
         sessionInstruction: 'This session only',
         sessionInstructionHint: 'Temporary rules for the current session; not written to the repository. Injected as a system prompt.',
         sessionInstructionNoSession: 'Open the panel from the session-header Instruction button to edit this session’s temporary instructions.',
@@ -1619,12 +1629,21 @@ window.__ModuleLoader__.load({
         return absolute
       }
 
+      const homePath = typeof state?.home === 'string' ? state.home : ''
+      const prettyPath = (raw) => {
+        const value = String(raw ?? '')
+        if (homePath.length === 0) return value
+        if (value === homePath) return '~'
+        if (value.startsWith(`${homePath}/`)) return `~${value.slice(homePath.length)}`
+        return value
+      }
+
       const pathRow = (label, filePath, key) =>
         h(
           'div',
           { className: 'dwi-path-row', key },
           h('span', { className: 'dwi-path-label' }, label),
-          h('code', { className: 'dwi-path-value', title: filePath }, filePath),
+          h('code', { className: 'dwi-path-value', title: filePath }, prettyPath(filePath)),
           h(
             'button',
             { type: 'button', className: 'dwi-btn small', onClick: () => copyText(filePath) },
@@ -1650,7 +1669,7 @@ window.__ModuleLoader__.load({
             { className: 'dwi-editor-actions' },
             h(
               'span',
-              { className: 'dwi-save-line' },
+              { className: 'dwi-save-line ' + (saving ? 'busy' : dirty ? 'dirty' : 'ok') },
               saving
                 ? tr('saving')
                 : dirty
@@ -1660,19 +1679,21 @@ window.__ModuleLoader__.load({
                     : tr('autoSaveHint'),
             ),
             notice !== null ? h('span', { className: 'dwi-notice ' + notice.kind }, notice.text) : null,
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'dwi-btn primary',
-                disabled: saving || !dirty,
-                onClick: () => {
-                  const current = saveRef.current
-                  if (typeof current === 'function') current('manual')
-                },
-              },
-              dirty ? tr('saveNow') : tr('saved'),
-            ),
+            dirty
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dwi-btn primary',
+                    disabled: saving,
+                    onClick: () => {
+                      const current = saveRef.current
+                      if (typeof current === 'function') current('manual')
+                    },
+                  },
+                  tr('saveNow'),
+                )
+              : null,
           ),
         )
 
@@ -2109,7 +2130,7 @@ window.__ModuleLoader__.load({
                 'span',
                 { className: 'dwi-nav-meta' },
                 extraGlobal?.exists
-                  ? `${formatBytes(extraGlobal.bytes)} · system prompt`
+                  ? `${formatBytes(extraGlobal.bytes)} · ${tr('systemPromptTag')}`
                   : tr('notCreated'),
               ),
             )
@@ -2128,7 +2149,7 @@ window.__ModuleLoader__.load({
                 'span',
                 { className: 'dwi-nav-meta' },
                 sessionInstruction?.exists
-                  ? `${formatBytes(sessionInstruction.bytes)} · system prompt`
+                  ? `${formatBytes(sessionInstruction.bytes)} · ${tr('systemPromptTag')}`
                   : tr('notCreated'),
               ),
             )
@@ -2164,7 +2185,7 @@ window.__ModuleLoader__.load({
                   onClick: () => selectProject(item.id),
                 },
                 h('span', { className: 'dwi-nav-title' }, item.title),
-                h('span', { className: 'dwi-nav-path', title: item.path }, item.path),
+                h('span', { className: 'dwi-nav-path', title: item.path }, prettyPath(item.path)),
                 h(
                   'span',
                   { className: 'dwi-nav-meta' },
@@ -2471,12 +2492,17 @@ window.__ModuleLoader__.load({
             { className: 'dwi-header-text' },
             h('h1', { className: 'dwi-title' }, tr('panel')),
             h('p', { className: 'dwi-subtitle' }, tr('intro')),
-            h('p', { className: 'dwi-hint' }, tr('engine')),
-            h('p', { className: 'dwi-hint' }, tr('budget')),
+            h(
+              'div',
+              { className: 'dwi-chips' },
+              h('span', { className: 'dwi-chip', title: tr('engine') }, tr('chipEngine')),
+              h('span', { className: 'dwi-chip system', title: tr('extraGlobalHint') }, tr('chipSystemPrompt')),
+              h('span', { className: 'dwi-chip', title: tr('budget') }, tr('chipBudget')),
+            ),
           ),
           h(
             'div',
-            { className: 'dwi-head-actions' },
+            { className: 'dwi-header-actions' },
             h(
               'button',
               { type: 'button', className: 'dwi-btn', onClick: refresh, disabled: status === 'loading' || saving },
@@ -2603,6 +2629,45 @@ window.__ModuleLoader__.load({
 .dwi-header-action{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:1.5;cursor:pointer}
 .dwi-header-action:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dwi-header-action:disabled{opacity:.55;cursor:default}
+
+/* ---- v0.8 visual polish ---- */
+.dwi-header{padding:22px 26px 16px;gap:20px;align-items:flex-start;background:linear-gradient(180deg,var(--dsw-alias-bg-layer-1),transparent)}
+.dwi-title{font-size:22px;letter-spacing:-.01em}
+.dwi-subtitle{font-size:13px;max-width:760px}
+.dwi-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.dwi-chip{padding:2px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;background:var(--dsw-alias-bg-layer-2);font-size:11px;line-height:1.7;color:var(--dsw-alias-label-secondary)}
+.dwi-chip.system{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,transparent)}
+.dwi-header-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;flex:none;max-width:320px}
+.dwi-header-actions .dwi-btn{padding:6px 10px}
+.dwi-nav{flex:0 0 280px;width:280px;padding:14px 12px}
+.dwi-nav-item{border-radius:10px;padding:9px 11px;transition:background .15s,border-color .15s,box-shadow .15s}
+.dwi-nav-item.active{box-shadow:inset 2px 0 0 var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}
+.dwi-nav-heading{margin:18px 10px 6px}
+.dwi-search{margin:2px 0 8px;padding:7px 10px;border-radius:9px}
+.dwi-main{max-width:1040px;width:100%;margin:0 auto;padding:22px 26px 60px;gap:16px}
+.dwi-card{border-radius:16px;padding:18px;transition:border-color .15s}
+.dwi-card:hover{border-color:var(--dsw-alias-border-l2)}
+.dwi-card-title{font-size:16px}
+.dwi-btn{border-radius:9px;transition:background .15s,border-color .15s,transform .05s}
+.dwi-btn:active:not(:disabled){transform:translateY(1px)}
+.dwi-editor{min-height:260px;border-radius:12px;transition:border-color .15s,box-shadow .15s}
+.dwi-editor:focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-brand-primary) 15%,transparent)}
+.dwi-editor::placeholder{color:var(--dsw-alias-label-secondary);opacity:.55}
+.dwi-editor-footer{margin-top:10px;padding-top:12px;border-top:1px dashed var(--dsw-alias-border-l1)}
+.dwi-save-line{display:inline-flex;align-items:center;gap:6px}
+.dwi-save-line::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
+.dwi-save-line.dirty::before{background:var(--dsw-alias-state-warn-primary)}
+.dwi-save-line.busy::before{background:var(--dsw-alias-brand-primary);animation:dwi-pulse 1s infinite}
+@keyframes dwi-pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.dwi-editor-actions{justify-content:flex-end;align-items:center}
+.dwi-banner{border-radius:12px;border-left-width:3px}
+.dwi-banner.warn{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,transparent)}
+.dwi-chain-row{border-radius:10px}
+.dwi-preview-head{border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dwi-nav::-webkit-scrollbar,.dwi-main::-webkit-scrollbar,.dwi-editor::-webkit-scrollbar{width:10px;height:10px}
+.dwi-nav::-webkit-scrollbar-thumb,.dwi-main::-webkit-scrollbar-thumb,.dwi-editor::-webkit-scrollbar-thumb{background:var(--dsw-alias-border-l2);border-radius:999px;border:2px solid transparent;background-clip:content-box}
+.dwi-nav::-webkit-scrollbar-thumb:hover,.dwi-main::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-label-secondary);background-clip:content-box}
+
 `
 
     /* ------------------------------------------------------------------ *
