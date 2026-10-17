@@ -23,6 +23,9 @@ DeepSeek Harness 桌面版插件：管理**全局**与**项目**两级 `AGENTS.m
 - **模板 / 片段**：内置回答风格、代码与测试、Git、安全、协作约定等模板，一键插入编辑器。
 - **多入口**：左侧栏面板、会话标题按钮之外，Settings → General 与新建会话 Hero 也提供入口。
 - **导入 / 导出**：全局 + 所有项目指令导出为 JSON 备份，也可按路径匹配恢复。
+- **自定义模板**：把当前内容存为本地模板（localStorage），随取随用。
+- **Markdown 预览 / 删除文件**：编辑器支持预览切换；可一键删除当前指令文件。
+- **渲染错误边界**：面板异常时显示错误信息，不影响其他会话。
 
 ## 安装
 
@@ -60,12 +63,14 @@ node --check index.js
 node --check typert.host.js
 node --check client.js
 node test/host.test.mjs
+node test/client-load.test.mjs
 ```
 
 Host 端测试使用 fake Cordis context 与临时目录，不会接触真实 profile 或真实 `~/.dsh`。CI 在 Node 20/22 上运行同一套检查（`.github/workflows/ci.yml`）。
 
 ## 版本
 
+- `0.6.0`：自定义模板、删除指令文件、Markdown 预览、渲染错误边界；客户端 smoke test 接入 CI。
 - `0.5.0`：模板/片段、Settings 与新建会话入口、JSON 导入导出、工具 `validate` dry-run diff、CI 与 CHANGELOG。
 - `0.4.0`：保存历史/恢复、外部修改冲突保护、原子写入、按来源的注入预览与 token/预算估算、工具跟随会话沙箱。
 - `0.3.0`：清空即删除、链上文件编辑、工作区搜索/修改时间、会话注入状态、引擎可用性警告；新增 `instructions` 工具与 `/instruction` 命令。

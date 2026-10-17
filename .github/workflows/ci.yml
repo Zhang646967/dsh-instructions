@@ -24,3 +24,5 @@ jobs:
           node --check client.js
       - name: Host smoke test
         run: node test/host.test.mjs
+      - name: Client smoke test
+        run: node test/client-load.test.mjs

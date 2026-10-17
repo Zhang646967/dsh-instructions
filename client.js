@@ -141,6 +141,22 @@ window.__ModuleLoader__.load({
         historyRefresh: '刷新历史',
         close: '关闭',
         templates: '模板',
+        customTemplates: '自定义模板',
+        customTemplatesEmpty: '还没有自定义模板。',
+        addTemplate: '把当前内容存为模板',
+        templateAdded: '已保存自定义模板',
+        templateEmpty: '当前编辑器内容为空',
+        delete: '删除',
+        deleteFile: '删除',
+        deleteConfirm: '删除这个指令文件？官方引擎会收到 "Instructions removed"。',
+        deleted: '指令文件已删除',
+        preview: '预览',
+        editMode: '编辑',
+        previewEmpty: '（空）',
+        renderErrorTitle: 'Instruction 面板渲染失败',
+        renderErrorHint: '可以把下面的错误信息发给我；其他会话不受影响。',
+        templateInserted: '已插入模板',
+
         templatesHint: '点击插入到当前编辑器末尾；插入后会自动保存。',
         templateInserted: '已插入模板',
         openPanel: '打开管理页',
@@ -258,6 +274,22 @@ window.__ModuleLoader__.load({
         historyRefresh: 'Refresh history',
         close: 'Close',
         templates: 'Templates',
+        customTemplates: 'Custom templates',
+        customTemplatesEmpty: 'No custom templates yet.',
+        addTemplate: 'Save current content as template',
+        templateAdded: 'Custom template saved',
+        templateEmpty: 'The editor is empty',
+        delete: 'Delete',
+        deleteFile: 'Delete',
+        deleteConfirm: 'Delete this instruction file? The official engine will see "Instructions removed".',
+        deleted: 'Instruction file deleted',
+        preview: 'Preview',
+        editMode: 'Edit',
+        previewEmpty: '(empty)',
+        renderErrorTitle: 'Instruction panel failed to render',
+        renderErrorHint: 'Send the error below to the author; other sessions are unaffected.',
+        templateInserted: 'Template inserted',
+
         templatesHint: 'Click to append to the current editor; it will be auto-saved.',
         templateInserted: 'Template inserted',
         openPanel: 'Open manager',
@@ -296,6 +328,8 @@ window.__ModuleLoader__.load({
         projectHint: 'Written to this workspace AGENTS.md; applies only to sessions in this workspace.',
       },
     }
+
+    const CUSTOM_TEMPLATE_KEY = 'dsh-instructions/custom-templates/v1'
 
     const TEMPLATES = [
       {
@@ -590,6 +624,42 @@ window.__ModuleLoader__.load({
      * effective chain preview.
      * ------------------------------------------------------------------ */
 
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props)
+        this.state = { error: null }
+      }
+
+      static getDerivedStateFromError(error) {
+        return { error }
+      }
+
+      componentDidCatch(error) {
+        console.error('[dsh-instructions] panel crashed', error)
+      }
+
+      render() {
+        if (this.state.error !== null) {
+          return h(
+            'div',
+            { className: 'dwi-page' },
+            h(
+              'div',
+              { className: 'dwi-main' },
+              h(
+                'div',
+                { className: 'dwi-card' },
+                h('h2', { className: 'dwi-card-title' }, tr('renderErrorTitle')),
+                h('p', { className: 'dwi-hint' }, tr('renderErrorHint')),
+                h('pre', { className: 'dwi-preview' }, String(this.state.error?.stack ?? this.state.error)),
+              ),
+            ),
+          )
+        }
+        return this.props.children
+      }
+    }
+
     const InstructionsPage = () => {
       useLocaleTick()
       const [state, setState] = useState(null)
@@ -607,6 +677,23 @@ window.__ModuleLoader__.load({
       const [historyEntries, setHistoryEntries] = useState([])
       const [historyLoading, setHistoryLoading] = useState(false)
       const [templatesOpen, setTemplatesOpen] = useState(false)
+      const [customTemplates, setCustomTemplates] = useState(() => {
+        try {
+          const raw = window.localStorage.getItem(CUSTOM_TEMPLATE_KEY)
+          if (typeof raw === 'string' && raw.length > 0) {
+            const parsed = JSON.parse(raw)
+            if (Array.isArray(parsed)) {
+              return parsed
+                .filter((item) => item && typeof item.id === 'string' && typeof item.text === 'string')
+                .slice(0, 30)
+            }
+          }
+        } catch {
+          /* storage unavailable */
+        }
+        return []
+      })
+      const [previewMode, setPreviewMode] = useState(false)
       const [exporting, setExporting] = useState(false)
       const [importing, setImporting] = useState(false)
       const importInputRef = React.useRef(null)
@@ -618,6 +705,14 @@ window.__ModuleLoader__.load({
       const [sessionStatus, setSessionStatus] = useState(null)
       const saveRef = React.useRef(null)
       const dirty = draft !== original
+
+      useEffect(() => {
+        try {
+          window.localStorage.setItem(CUSTOM_TEMPLATE_KEY, JSON.stringify(customTemplates))
+        } catch {
+          /* storage unavailable */
+        }
+      }, [customTemplates])
 
       const estimateTokens = (text) => {
         const value = String(text ?? '')
@@ -670,6 +765,7 @@ window.__ModuleLoader__.load({
         setProject(null)
         setEditingPath(null)
         setHistoryOpen(false)
+        setPreviewMode(false)
         setConflict(null)
         const content = next?.global?.content ?? ''
         setDraft(content)
@@ -684,6 +780,7 @@ window.__ModuleLoader__.load({
           setProject(full)
           setEditingPath(null)
           setHistoryOpen(false)
+          setPreviewMode(false)
           setConflict(null)
           setDraft(full?.content ?? '')
           setOriginal(full?.content ?? '')
@@ -987,6 +1084,7 @@ window.__ModuleLoader__.load({
           setOriginalHash(file.hash ?? '')
           setConflict(null)
           setHistoryOpen(false)
+          setPreviewMode(false)
           setNotice(null)
         } catch (error) {
           setNotice({ kind: 'error', text: String(error?.message ?? error) })
@@ -1070,13 +1168,36 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const insertTemplate = (template) => {
-        const text = activeLanguage() === 'en' ? template.en : template.zh
+      const insertText = (text) => {
         const separator =
           draft.length === 0 ? '' : draft.endsWith('\n\n') ? '' : draft.endsWith('\n') ? '\n' : '\n\n'
         setDraft(draft + separator + text)
         setNotice({ kind: 'ok', text: tr('templateInserted') })
         setTemplatesOpen(false)
+      }
+
+      const insertTemplate = (template) => {
+        insertText(activeLanguage() === 'en' ? template.en : template.zh)
+      }
+
+      const insertCustomTemplate = (template) => {
+        insertText(template.text)
+      }
+
+      const addCustomTemplate = () => {
+        const text = draft.trim()
+        if (text.length === 0) {
+          setNotice({ kind: 'error', text: tr('templateEmpty') })
+          return
+        }
+        setCustomTemplates((previous) =>
+          [{ id: `custom-${Date.now().toString(36)}`, text: draft }, ...previous].slice(0, 30),
+        )
+        setNotice({ kind: 'ok', text: tr('templateAdded') })
+      }
+
+      const removeCustomTemplate = (id) => {
+        setCustomTemplates((previous) => previous.filter((item) => item.id !== id))
       }
 
       const exportAll = async () => {
@@ -1167,6 +1288,124 @@ window.__ModuleLoader__.load({
         } finally {
           setImporting(false)
         }
+      }
+
+      const deleteCurrentFile = async () => {
+        if (!API || saving) return
+        if (!window.confirm(tr('deleteConfirm'))) return
+        setSaving(true)
+        setNotice(null)
+        try {
+          let result
+          if (active.kind === 'project' && typeof active.id === 'string') {
+            result =
+              editingPath !== null
+                ? await unwrap(API.saveFile(active.id, editingPath, '', originalHash))
+                : await unwrap(API.saveProject(active.id, '', originalHash))
+          } else {
+            result = await unwrap(API.saveGlobal('', originalHash))
+          }
+          if (result !== null && typeof result === 'object' && result.stale === true) {
+            setConflict({ current: result.current ?? null })
+            setNotice({ kind: 'error', text: tr('conflictDetected') })
+            return
+          }
+          setConflict(null)
+          if (active.kind === 'project' && typeof active.id === 'string') {
+            const full = result?.project
+            setProject(full)
+            setState((previous) =>
+              previous === null
+                ? previous
+                : {
+                    ...previous,
+                    projects: previous.projects.map((item) =>
+                      item.id === active.id
+                        ? { ...item, targetExists: full?.targetExists, bytes: full?.bytes, mtime: full?.mtime }
+                        : item,
+                    ),
+                  },
+            )
+            if (editingPath !== null && editingPath !== full?.targetPath) {
+              setEditingPath(null)
+              setDraft(full?.content ?? '')
+              setOriginal(full?.content ?? '')
+              setOriginalHash(full?.targetHash ?? '')
+            } else {
+              setDraft('')
+              setOriginal('')
+              setOriginalHash('')
+            }
+            void loadChainContents(active.id, full)
+          } else {
+            const global = result?.global
+            setDraft('')
+            setOriginal('')
+            setOriginalHash(global?.hash ?? '')
+            setState((previous) =>
+              previous === null ? previous : { ...previous, global: { ...previous.global, ...global } },
+            )
+          }
+          setLastSavedAt(Date.now())
+          setNotice({ kind: 'ok', text: tr('deleted') })
+          if (sessionId !== null) fetchSessionStatus(sessionId)
+        } catch (error) {
+          setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        } finally {
+          setSaving(false)
+        }
+      }
+
+      const renderMarkdown = (text) => {
+        const lines = String(text ?? '').split('\n')
+        const nodes = []
+        let codeLines = null
+        let listItems = null
+        const flushList = () => {
+          if (listItems !== null && listItems.length > 0) {
+            nodes.push(h('ul', { className: 'dwi-md-list', key: `ul-${nodes.length}` }, listItems))
+          }
+          listItems = null
+        }
+        for (let index = 0; index < lines.length; index += 1) {
+          const line = lines[index]
+          if (line.trim().startsWith('```')) {
+            if (codeLines === null) {
+              codeLines = []
+            } else {
+              nodes.push(h('pre', { className: 'dwi-md-code', key: `code-${index}` }, codeLines.join('\n')))
+              codeLines = null
+            }
+            continue
+          }
+          if (codeLines !== null) {
+            codeLines.push(line)
+            continue
+          }
+          if (line.startsWith('### ')) {
+            flushList()
+            nodes.push(h('h4', { className: 'dwi-md-h', key: `h-${index}` }, line.slice(4)))
+          } else if (line.startsWith('## ')) {
+            flushList()
+            nodes.push(h('h3', { className: 'dwi-md-h', key: `h-${index}` }, line.slice(3)))
+          } else if (line.startsWith('# ')) {
+            flushList()
+            nodes.push(h('h2', { className: 'dwi-md-h', key: `h-${index}` }, line.slice(2)))
+          } else if (/^\s*[-*]\s+/.test(line)) {
+            if (listItems === null) listItems = []
+            listItems.push(h('li', { key: `li-${index}` }, line.replace(/^\s*[-*]\s+/, '')))
+          } else if (line.trim().length === 0) {
+            flushList()
+          } else {
+            flushList()
+            nodes.push(h('p', { className: 'dwi-md-p', key: `p-${index}` }, line))
+          }
+        }
+        if (codeLines !== null) {
+          nodes.push(h('pre', { className: 'dwi-md-code', key: 'code-end' }, codeLines.join('\n')))
+        }
+        flushList()
+        return nodes
       }
 
       const projects = state?.projects ?? []
@@ -1508,6 +1747,49 @@ window.__ModuleLoader__.load({
                 ),
               ),
             ),
+            h(
+              'div',
+              { className: 'dwi-template-group' },
+              h('div', { className: 'dwi-template-group-title' }, tr('customTemplates')),
+              customTemplates.length === 0
+                ? h('p', { className: 'dwi-hint' }, tr('customTemplatesEmpty'))
+                : null,
+              customTemplates.length > 0
+                ? h(
+                    'div',
+                    { className: 'dwi-template-list' },
+                    customTemplates.map((template) =>
+                      h(
+                        'div',
+                        { className: 'dwi-custom-row', key: template.id },
+                        h(
+                          'button',
+                          {
+                            type: 'button',
+                            className: 'dwi-template-item',
+                            onClick: () => insertCustomTemplate(template),
+                          },
+                          template.text,
+                        ),
+                        h(
+                          'button',
+                          {
+                            type: 'button',
+                            className: 'dwi-btn small danger',
+                            onClick: () => removeCustomTemplate(template.id),
+                          },
+                          tr('delete'),
+                        ),
+                      ),
+                    ),
+                  )
+                : null,
+              h(
+                'div',
+                { className: 'dwi-template-actions' },
+                h('button', { type: 'button', className: 'dwi-btn small', onClick: addCustomTemplate }, tr('addTemplate')),
+              ),
+            ),
           )
         : null
 
@@ -1618,6 +1900,18 @@ window.__ModuleLoader__.load({
                 { className: 'dwi-head-actions' },
                 h(
                   'button',
+                  { type: 'button', className: 'dwi-btn small', onClick: () => setPreviewMode((value) => !value) },
+                  previewMode ? tr('editMode') : tr('preview'),
+                ),
+                globalInfo?.exists
+                  ? h(
+                      'button',
+                      { type: 'button', className: 'dwi-btn small danger', onClick: deleteCurrentFile },
+                      tr('deleteFile'),
+                    )
+                  : null,
+                h(
+                  'button',
                   { type: 'button', className: 'dwi-btn small', onClick: () => setTemplatesOpen((value) => !value) },
                   tr('templates'),
                 ),
@@ -1630,17 +1924,25 @@ window.__ModuleLoader__.load({
               ),
             ),
             pathRow(tr('globalFile'), globalInfo?.path ?? '~/.dsh/AGENTS.md', 'global-path'),
-            h('textarea', {
-              className: 'dwi-editor',
-              value: draft,
-              placeholder: tr('globalPlaceholder'),
-              spellCheck: false,
-              onChange: (event) => {
-                setDraft(event.target.value)
-                setNotice(null)
-              },
-              onKeyDown: onEditorKeyDown,
-            }),
+            previewMode
+              ? h(
+                  'div',
+                  { className: 'dwi-md' },
+                  draft.trim().length === 0
+                    ? h('p', { className: 'dwi-hint' }, tr('previewEmpty'))
+                    : renderMarkdown(draft),
+                )
+              : h('textarea', {
+                  className: 'dwi-editor',
+                  value: draft,
+                  placeholder: tr('globalPlaceholder'),
+                  spellCheck: false,
+                  onChange: (event) => {
+                    setDraft(event.target.value)
+                    setNotice(null)
+                  },
+                  onKeyDown: onEditorKeyDown,
+                }),
             editorFooter(
               `${draft.length} ${tr('chars')} · ${formatBytes(byteLength(draft))} · ${tr('tokenEstimate')} ≈ ${estimateTokens(
                 draft,
@@ -1706,6 +2008,18 @@ window.__ModuleLoader__.load({
                   : null,
                 h(
                   'button',
+                  { type: 'button', className: 'dwi-btn small', onClick: () => setPreviewMode((value) => !value) },
+                  previewMode ? tr('editMode') : tr('preview'),
+                ),
+                currentFileExists
+                  ? h(
+                      'button',
+                      { type: 'button', className: 'dwi-btn small danger', onClick: deleteCurrentFile },
+                      tr('deleteFile'),
+                    )
+                  : null,
+                h(
+                  'button',
                   { type: 'button', className: 'dwi-btn small', onClick: () => setTemplatesOpen((value) => !value) },
                   tr('templates'),
                 ),
@@ -1718,17 +2032,25 @@ window.__ModuleLoader__.load({
               ),
             ),
             pathRow(tr('projectFile'), currentFilePath || project.targetPath, 'project-path'),
-            h('textarea', {
-              className: 'dwi-editor',
-              value: draft,
-              placeholder: tr('projectPlaceholder'),
-              spellCheck: false,
-              onChange: (event) => {
-                setDraft(event.target.value)
-                setNotice(null)
-              },
-              onKeyDown: onEditorKeyDown,
-            }),
+            previewMode
+              ? h(
+                  'div',
+                  { className: 'dwi-md' },
+                  draft.trim().length === 0
+                    ? h('p', { className: 'dwi-hint' }, tr('previewEmpty'))
+                    : renderMarkdown(draft),
+                )
+              : h('textarea', {
+                  className: 'dwi-editor',
+                  value: draft,
+                  placeholder: tr('projectPlaceholder'),
+                  spellCheck: false,
+                  onChange: (event) => {
+                    setDraft(event.target.value)
+                    setNotice(null)
+                  },
+                  onKeyDown: onEditorKeyDown,
+                }),
             editorFooter(
               `${draft.length} ${tr('chars')} · ${formatBytes(byteLength(draft))} · ${tr('tokenEstimate')} ≈ ${estimateTokens(
                 draft,
@@ -1792,8 +2114,11 @@ window.__ModuleLoader__.load({
       }
 
       return h(
-        'div',
-        { className: 'dwi-page' },
+        ErrorBoundary,
+        null,
+        h(
+          'div',
+          { className: 'dwi-page' },
         h('style', null, CSS),
         h(
           'header',
@@ -1833,7 +2158,8 @@ window.__ModuleLoader__.load({
             }),
           ),
         ),
-        h('div', { className: 'dwi-body' }, nav, main),
+          h('div', { className: 'dwi-body' }, nav, main),
+        ),
       )
     }
 
@@ -1920,6 +2246,17 @@ window.__ModuleLoader__.load({
 .dwi-settings-text{min-width:0}
 .dwi-settings-title{font-size:13px;font-weight:600;line-height:1.4}
 .dwi-settings-desc{margin-top:2px;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary)}
+.dwi-custom-row{display:flex;align-items:flex-start;gap:8px}
+.dwi-custom-row .dwi-template-item{flex:1}
+.dwi-template-actions{margin-top:8px}
+.dwi-btn.danger{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+.dwi-btn.danger:hover:not(:disabled){border-color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-2)}
+.dwi-md{box-sizing:border-box;min-height:300px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-base);overflow:auto;font-size:13px;line-height:1.7}
+.dwi-md-h{margin:12px 0 6px;font-size:14px;font-weight:600;line-height:1.4}
+.dwi-md-p{margin:4px 0;white-space:pre-wrap;word-break:break-word}
+.dwi-md-list{margin:4px 0 4px 18px;padding:0}
+.dwi-md-list li{margin:2px 0}
+.dwi-md-code{margin:8px 0;padding:10px;overflow:auto;border-radius:8px;background:var(--dsw-alias-bg-layer-2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;white-space:pre-wrap}
 .dwi-header-action{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:1.5;cursor:pointer}
 .dwi-header-action:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dwi-header-action:disabled{opacity:.55;cursor:default}
