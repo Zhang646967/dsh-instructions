@@ -1,0 +1,59 @@
+{
+  "name": "dsh-instructions",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "前置指令管理：编辑全局与项目 AGENTS.md，桌面版官方注入引擎自动读取",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./typert": "./typert.host.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "typert.host.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    },
+    "compatibility": {
+      "dsh": ">=0.2.1-rc.1 <0.3.0-0"
+    }
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "instructions",
+    "agents-md",
+    "prompt",
+    "desktop"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/host.test.mjs"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zhang646967/dsh-instructions.git"
+  },
+  "homepage": "https://github.com/Zhang646967/dsh-instructions#readme",
+  "bugs": {
+    "url": "https://github.com/Zhang646967/dsh-instructions/issues"
+  }
+}

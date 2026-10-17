@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Instruction",
+    "description": "管理全局与项目 AGENTS.md（输入自动保存、链文件编辑、注入预览、会话注入状态），并提供 instructions 工具与 /instruction 命令。"
+  }
+}

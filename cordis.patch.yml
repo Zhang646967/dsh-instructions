@@ -1,0 +1,4 @@
+# dsh-instructions bundle patch: one host row + its browser half.
+- insert:
+    - id: instructions
+      name: dsh-instructions

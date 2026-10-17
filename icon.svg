@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Instructions">
+  <rect x="10" y="6" width="44" height="52" rx="11" fill="#2f6fed"/>
+  <rect x="18" y="16" width="28" height="4" rx="2" fill="#ffffff" opacity="0.95"/>
+  <rect x="18" y="26" width="28" height="4" rx="2" fill="#ffffff" opacity="0.8"/>
+  <rect x="18" y="36" width="17" height="4" rx="2" fill="#ffffff" opacity="0.65"/>
+  <path d="M40 45h6l5 6H40z" fill="#ffffff" opacity="0.9"/>
+</svg>

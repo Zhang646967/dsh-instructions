@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Instructions",
+    "description": "Manage global and project AGENTS.md with auto-save, chain-file editing, injection preview and session status; also exposes the instructions tool and /instruction command."
+  }
+}
