@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Host-half smoke test: runs the plugin's `apply(ctx)` against a fake Cordis
- * context (no DSH process required) and checks the file/instruction logic.
+ * context (no DSH process required) and checks file/instruction logic,
+ * history snapshots, stale-write protection, the agent tool and the command.
  *
  *   node test/host.test.mjs
  */
@@ -35,6 +36,7 @@ try {
   const provided = {}
   const registered = {}
   const deferred = []
+  const sandbox = { mode: 'workspace-write', workspaceRoot: workspace }
   const instructionEvents = [
     {
       type: 'user/message',
@@ -79,6 +81,7 @@ try {
       if (name === 'sessions') return { get: (id) => sessions.get(id) }
       if (name === 'tools') return toolApi
       if (name === 'commands') return commandApi
+      if (name === 'sandboxPolicy') return { resolve: () => ({ ...sandbox }) }
       return undefined
     },
     provide(name, value) {
@@ -96,31 +99,52 @@ try {
   const api = provided.instructions
   assert.ok(api, 'instructions service is provided')
 
-  // Chain resolution: empty files do not appear in the project chain.
+  // Chain resolution: .git selects the project root.
   const initial = await api.getState()
   assert.equal(initial.global.exists, false)
+  assert.equal(initial.global.hash, '')
   assert.equal(initial.projects.length, 2)
   assert.equal(initial.projects[1].root, repo, 'project root discovery climbs to .git')
 
-  // Empty content deletes the file; non-empty writes the official path.
-  await api.saveGlobal('')
-  await api.saveGlobal('# global\n\nReply in Chinese.\n')
-  const withGlobal = await api.getState()
-  assert.equal(withGlobal.global.exists, true)
-  assert.equal(await api.readFile('ws1', path.join(workspace, 'AGENTS.md')).then((f) => f.exists), false)
+  // Empty content deletes the file; non-empty writes the official path + hash.
+  const deleted = await api.saveGlobal('', '')
+  assert.equal(deleted.stale, false)
+  assert.equal(deleted.global.exists, false)
+  const firstSave = await api.saveGlobal('# global\n\nReply in Chinese.\n', '')
+  assert.equal(firstSave.stale, false)
+  assert.equal(firstSave.global.exists, true)
+  assert.match(firstSave.global.hash, /^[0-9a-f]{40}$/)
 
-  await api.saveProject('ws1', '# project\n')
-  const project = await api.readProject('ws1')
-  assert.equal(project.targetExists, true)
-  assert.equal(project.content, '# project\n')
-  assert.ok(project.chain.some((entry) => entry.scope === 'global' && entry.exists))
-  assert.ok(project.chain.some((entry) => entry.scope === 'project' && entry.displayPath === 'AGENTS.md'))
+  // Stale-write protection: a wrong base hash reports the current content.
+  const staleSave = await api.saveGlobal('# overwrite?\n', 'deadbeef')
+  assert.equal(staleSave.stale, true)
+  assert.equal(staleSave.current.hash, firstSave.global.hash)
+  assert.match(staleSave.current.content, /Reply in Chinese/)
+
+  // Correct base hash writes and archives the previous content for history.
+  const secondSave = await api.saveGlobal('# global v2\n', firstSave.global.hash)
+  assert.equal(secondSave.stale, false)
+  const globalHistory = await api.listHistory('', '')
+  assert.ok(globalHistory.entries.length >= 1, 'previous global content is snapshotted')
+  const restored = await api.restoreHistory('', '', globalHistory.entries[0].id)
+  assert.match(restored.file.content, /Reply in Chinese/)
+
+  // Project primary file: save returns {stale, project} and a target hash.
+  const projectSave = await api.saveProject('ws1', '# project\n', '')
+  assert.equal(projectSave.stale, false)
+  assert.equal(projectSave.project.targetExists, true)
+  assert.equal(projectSave.project.content, '# project\n')
+  assert.match(projectSave.project.targetHash, /^[0-9a-f]{40}$/)
+  assert.ok(projectSave.project.chain.some((entry) => entry.scope === 'global' && entry.exists))
+  assert.ok(projectSave.project.chain.some((entry) => entry.scope === 'project' && entry.displayPath === 'AGENTS.md'))
 
   // Chain-file validation rejects paths outside the instruction chain.
   await assert.rejects(() => api.readFile('ws1', '/etc/passwd'), /Not inside the instruction chain/)
-  const chainFile = await api.readFile('ws1', project.targetPath)
+  const chainFile = await api.readFile('ws1', projectSave.project.targetPath)
   assert.equal(chainFile.content, '# project\n')
-  const removed = await api.saveFile('ws1', project.targetPath, '')
+  assert.match(chainFile.hash, /^[0-9a-f]{40}$/)
+  const removed = await api.saveFile('ws1', projectSave.project.targetPath, '', '')
+  assert.equal(removed.stale, false)
   assert.equal(removed.file.exists, false, 'empty content deletes a chain file')
   assert.equal(removed.project.targetExists, false)
 
@@ -133,7 +157,7 @@ try {
   assert.ok(status.totalBytes > 0)
   assert.equal(api.getSessionStatus('s2').engineActive, false, 'minimal preset reports the engine off')
 
-  // Agent tool: list / get / set / append / remove, global read-only.
+  // Agent tool: list / get / set / append / remove; global read-only.
   assert.ok(registered.tool, 'instructions tool registered')
   assert.ok(registered.command, '/instruction command registered')
   const listed = await registered.tool.execute({ action: 'list' }, { agent: { id: 's1' } })
@@ -143,10 +167,25 @@ try {
   const readTool = await registered.tool.execute({ action: 'get' }, { agent: { id: 's1' } })
   assert.match(readTool.content, /from tool/)
   assert.match(readTool.content, /appended/)
+  const validateResult = await registered.tool.execute(
+    { action: 'validate', content: '# from tool\n- appended\n- extra\n' },
+    { agent: { id: 's1' } },
+  )
+  assert.equal(validateResult.note, 'Dry run only; nothing was written.')
+  assert.match(validateResult.diff, /^\+ /m)
+  assert.equal((await registered.tool.execute({ action: 'get' }, { agent: { id: 's1' } })).content.includes('- extra'), false)
   await assert.rejects(
     () => registered.tool.execute({ action: 'set', scope: 'global', content: 'x' }, { agent: { id: 's1' } }),
     /user-only/,
   )
+
+  // Sandbox awareness: read-only sessions refuse tool writes.
+  sandbox.mode = 'read-only'
+  await assert.rejects(
+    () => registered.tool.execute({ action: 'set', content: '# nope\n' }, { agent: { id: 's1' } }),
+    /read-only sandbox/,
+  )
+  sandbox.mode = 'workspace-write'
   const removedByTool = await registered.tool.execute({ action: 'remove' }, { agent: { id: 's1' } })
   assert.equal(removedByTool.exists, false)
 

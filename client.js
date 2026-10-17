@@ -42,12 +42,14 @@ window.__ModuleLoader__.load({
       descriptors: [
         descriptor('getState'),
         descriptor('readProject', ['workspaceId']),
-        descriptor('saveGlobal', ['content']),
-        descriptor('saveProject', ['workspaceId', 'content']),
+        descriptor('saveGlobal', ['content', 'baseHash']),
+        descriptor('saveProject', ['workspaceId', 'content', 'baseHash']),
         descriptor('findWorkspaceForSession', ['sessionId']),
         descriptor('readFile', ['workspaceId', 'filePath']),
-        descriptor('saveFile', ['workspaceId', 'filePath', 'content']),
+        descriptor('saveFile', ['workspaceId', 'filePath', 'content', 'baseHash']),
         descriptor('getSessionStatus', ['sessionId']),
+        descriptor('listHistory', ['workspaceId', 'filePath']),
+        descriptor('restoreHistory', ['workspaceId', 'filePath', 'snapshotId']),
       ],
     }
 
@@ -117,6 +119,39 @@ window.__ModuleLoader__.load({
         engineOff: '未启用',
         sessionFiles: '个文件',
         sessionUnknown: '会话状态不可读',
+        history: '历史',
+        historyTitle: '保存历史',
+        historyHint: '每次保存前自动归档上一版，最多保留 20 份。恢复时会先归档当前内容。',
+        historyEmpty: '暂无历史版本',
+        restore: '恢复',
+        restoreConfirm: '恢复这个历史版本？当前内容会先被归档。',
+        restored: '已恢复历史版本',
+        reloadFromDisk: '重新加载',
+        overwrite: '覆盖保存',
+        conflictDetected: '检测到文件已被外部修改',
+        conflictBody: '该文件在别处被修改过。重新加载会丢弃你的修改；覆盖保存会保留你的修改并覆盖外部内容。',
+        lastInjected: '最近注入',
+        baselineOn: '含基线',
+        baselineOff: '仅增量',
+        messagesUnit: '条注入消息',
+        approxTokens: '≈ tokens',
+        tokenEstimate: 'token 估算',
+        budgetUsage: '预算',
+        restoredFromDisk: '已重新加载磁盘内容',
+        historyRefresh: '刷新历史',
+        close: '关闭',
+        templates: '模板',
+        templatesHint: '点击插入到当前编辑器末尾；插入后会自动保存。',
+        templateInserted: '已插入模板',
+        openPanel: '打开管理页',
+        settingsRowHint: '管理全局与项目 AGENTS.md 前置指令，查看官方注入预览。',
+        export: '导出',
+        import: '导入',
+        exportDone: '已导出备份',
+        importDone: '导入完成',
+        importConfirm: '导入会用备份内容覆盖全局与已匹配项目的指令，继续？',
+        importInvalid: '不是有效的 dsh-instructions 备份文件',
+
         engineInactiveWarn:
           '当前会话的 Agent 预设未启用官方注入引擎（例如 minimal 预设）：这些指令不会注入。请切换到 standard / ptc / cordis 预设。',
 
@@ -201,6 +236,39 @@ window.__ModuleLoader__.load({
         engineOff: 'not enabled',
         sessionFiles: 'files',
         sessionUnknown: 'Session state unavailable',
+        history: 'History',
+        historyTitle: 'Save history',
+        historyHint: 'The previous version is archived before every save (up to 20 kept). Restoring archives the current content first.',
+        historyEmpty: 'No saved versions yet',
+        restore: 'Restore',
+        restoreConfirm: 'Restore this version? The current content is archived first.',
+        restored: 'Version restored',
+        reloadFromDisk: 'Reload',
+        overwrite: 'Overwrite',
+        conflictDetected: 'The file changed outside this editor',
+        conflictBody: 'It was modified elsewhere. Reload discards your edits; Overwrite keeps your edits and replaces the external content.',
+        lastInjected: 'Last injected',
+        baselineOn: 'baseline',
+        baselineOff: 'incremental',
+        messagesUnit: 'injection messages',
+        approxTokens: '≈ tokens',
+        tokenEstimate: 'token estimate',
+        budgetUsage: 'Budget',
+        restoredFromDisk: 'Reloaded from disk',
+        historyRefresh: 'Refresh history',
+        close: 'Close',
+        templates: 'Templates',
+        templatesHint: 'Click to append to the current editor; it will be auto-saved.',
+        templateInserted: 'Template inserted',
+        openPanel: 'Open manager',
+        settingsRowHint: 'Manage global and project AGENTS.md instructions and inspect the official injection preview.',
+        export: 'Export',
+        import: 'Import',
+        exportDone: 'Backup exported',
+        importDone: 'Import finished',
+        importConfirm: 'Importing will overwrite global and matched project instructions with the backup. Continue?',
+        importInvalid: 'Not a valid dsh-instructions backup file',
+
         engineInactiveWarn:
           'This session agent preset does not mount the built-in injection engine (for example the minimal preset): these instructions are not injected. Switch to the standard / ptc / cordis preset.',
 
@@ -228,6 +296,65 @@ window.__ModuleLoader__.load({
         projectHint: 'Written to this workspace AGENTS.md; applies only to sessions in this workspace.',
       },
     }
+
+    const TEMPLATES = [
+      {
+        id: 'language-zh',
+        group: 'style',
+        zh: '始终使用简体中文回答；代码、命令和文件路径保持原样。',
+        en: 'Always answer in Simplified Chinese. Keep code, commands and file paths as-is.',
+      },
+      {
+        id: 'plan-first',
+        group: 'style',
+        zh: '修改代码前，先用一两句话说明计划；涉及多文件或高风险改动时，先征得同意。',
+        en: 'Before editing code, state the plan in one or two sentences; ask first for multi-file or risky changes.',
+      },
+      {
+        id: 'pnpm',
+        group: 'code',
+        zh: '本仓库使用 pnpm；安装依赖用 pnpm install，运行测试用 pnpm test，不要用 npm/yarn 生成新的锁文件。',
+        en: 'This repository uses pnpm: install with pnpm install, test with pnpm test; do not create npm/yarn lockfiles.',
+      },
+      {
+        id: 'tests',
+        group: 'code',
+        zh: '修改行为后补充或更新测试；提交前运行与改动相关的测试，并在回复中说明测试结果。',
+        en: 'Add or update tests when behavior changes; run the relevant tests before finishing and report the result.',
+      },
+      {
+        id: 'commit',
+        group: 'git',
+        zh: '不要自动 git commit / push；需要提交时先说明将要提交的文件和提交信息，得到同意后再执行。',
+        en: 'Do not git commit or push automatically. Show the files and message you intend to commit, then wait for approval.',
+      },
+      {
+        id: 'secrets',
+        group: 'security',
+        zh: '不要读取或输出任何密钥、令牌、.env 内容；需要凭据时说明需要哪一类凭据，由用户自行提供。',
+        en: 'Never read or print secrets, tokens or .env contents; state what kind of credential is needed and let the user supply it.',
+      },
+      {
+        id: 'scope',
+        group: 'security',
+        zh: '只修改与当前任务相关的文件；不要顺手清理、重排或重构无关代码。',
+        en: 'Only touch files relevant to the task; do not clean up, reorder or refactor unrelated code.',
+      },
+      {
+        id: 'team',
+        group: 'team',
+        zh: '提交前检查 AGENTS.md 与 README 是否需要同步更新；新增约定时优先写入项目指令，而不是只留在对话里。',
+        en: 'Before finishing, check whether AGENTS.md/README need updates; record new conventions in project instructions rather than leaving them in chat.',
+      },
+    ]
+
+    const TEMPLATE_GROUPS = [
+      { id: 'style', zh: '回答风格', en: 'Answer style' },
+      { id: 'code', zh: '代码与测试', en: 'Code & tests' },
+      { id: 'git', zh: '提交与 Git', en: 'Commits & Git' },
+      { id: 'security', zh: '安全与边界', en: 'Safety & scope' },
+      { id: 'team', zh: '协作约定', en: 'Team conventions' },
+    ]
 
     const activeLanguage = () => {
       try {
@@ -409,6 +536,56 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ *
+     * Extra entry points: one row in Settings → General and one option in
+     * the New Session hero, both opening the Instruction panel.
+     * ------------------------------------------------------------------ */
+
+    const SettingsInstructionRow = () => {
+      useLocaleTick()
+      return h(
+        'div',
+        { className: 'dwi-settings-row' },
+        h(
+          'div',
+          { className: 'dwi-settings-text' },
+          h('div', { className: 'dwi-settings-title' }, tr('panel')),
+          h('div', { className: 'dwi-settings-desc' }, tr('settingsRowHint')),
+        ),
+        h(
+          'button',
+          { type: 'button', className: 'dwi-btn small', onClick: () => openInstructionsPanel() },
+          tr('openPanel'),
+        ),
+      )
+    }
+
+    const HeroInstructionOption = (props) => {
+      useLocaleTick()
+      const [busy, setBusy] = useState(false)
+      const sessionId = props?.sessionId
+      const onClick = useCallback(async () => {
+        if (busy) return
+        setBusy(true)
+        let workspaceId = null
+        try {
+          if (sessionId !== undefined && API) {
+            workspaceId = await unwrap(API.findWorkspaceForSession(String(sessionId)))
+          }
+        } catch (error) {
+          console.warn('[dsh-instructions] cannot resolve the workspace of this session', error)
+        } finally {
+          setBusy(false)
+        }
+        openInstructionsPanel(workspaceId, sessionId)
+      }, [busy, sessionId])
+      return h(
+        'button',
+        { type: 'button', className: 'dwi-btn small', title: tr('headerTip'), onClick, disabled: busy },
+        tr('headerAction'),
+      )
+    }
+
+    /* ------------------------------------------------------------------ *
      * Settings page: global + per-workspace AGENTS.md editors with the
      * effective chain preview.
      * ------------------------------------------------------------------ */
@@ -423,6 +600,16 @@ window.__ModuleLoader__.load({
       const [editingPath, setEditingPath] = useState(null)
       const [draft, setDraft] = useState('')
       const [original, setOriginal] = useState('')
+      const [originalHash, setOriginalHash] = useState('')
+      const [conflict, setConflict] = useState(null)
+      const [chainContents, setChainContents] = useState({})
+      const [historyOpen, setHistoryOpen] = useState(false)
+      const [historyEntries, setHistoryEntries] = useState([])
+      const [historyLoading, setHistoryLoading] = useState(false)
+      const [templatesOpen, setTemplatesOpen] = useState(false)
+      const [exporting, setExporting] = useState(false)
+      const [importing, setImporting] = useState(false)
+      const importInputRef = React.useRef(null)
       const [saving, setSaving] = useState(false)
       const [notice, setNotice] = useState(null)
       const [lastSavedAt, setLastSavedAt] = useState(0)
@@ -431,6 +618,23 @@ window.__ModuleLoader__.load({
       const [sessionStatus, setSessionStatus] = useState(null)
       const saveRef = React.useRef(null)
       const dirty = draft !== original
+
+      const estimateTokens = (text) => {
+        const value = String(text ?? '')
+        let cjk = 0
+        let other = 0
+        for (const character of value) {
+          const code = character.codePointAt(0) ?? 0
+          const isCjk =
+            (code >= 0x3040 && code <= 0x30ff) ||
+            (code >= 0x3400 && code <= 0x9fff) ||
+            (code >= 0xac00 && code <= 0xd7af) ||
+            (code >= 0xf900 && code <= 0xfaff)
+          if (isCjk) cjk += 1
+          else other += 1
+        }
+        return cjk + Math.ceil(other / 4)
+      }
 
       const fetchSessionStatus = useCallback(async (id) => {
         if (!API || id === null || id === undefined) return
@@ -442,25 +646,54 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
+      const loadChainContents = useCallback(async (workspaceId, projectState) => {
+        const entries = (projectState?.chain ?? []).filter(
+          (entry) => entry.scope === 'project' && entry.exists === true,
+        )
+        const map = {}
+        await Promise.all(
+          entries.map(async (entry) => {
+            try {
+              const file = await unwrap(API.readFile(workspaceId, entry.absolutePath))
+              map[entry.absolutePath] = file.content ?? ''
+            } catch {
+              /* one unreadable chain file should not blank the preview */
+            }
+          }),
+        )
+        setChainContents(map)
+      }, [])
+
       const applyGlobal = useCallback((next) => {
         setState(next)
         setActive({ kind: 'global' })
         setProject(null)
         setEditingPath(null)
+        setHistoryOpen(false)
+        setConflict(null)
         const content = next?.global?.content ?? ''
         setDraft(content)
         setOriginal(content)
+        setOriginalHash(next?.global?.hash ?? '')
       }, [])
 
-      const loadProject = useCallback(async (workspaceId) => {
-        const full = await unwrap(API.readProject(workspaceId))
-        setActive({ kind: 'project', id: workspaceId })
-        setProject(full)
-        setEditingPath(null)
-        setDraft(full?.content ?? '')
-        setOriginal(full?.content ?? '')
-        setNotice(null)
-      }, [])
+      const loadProject = useCallback(
+        async (workspaceId) => {
+          const full = await unwrap(API.readProject(workspaceId))
+          setActive({ kind: 'project', id: workspaceId })
+          setProject(full)
+          setEditingPath(null)
+          setHistoryOpen(false)
+          setConflict(null)
+          setDraft(full?.content ?? '')
+          setOriginal(full?.content ?? '')
+          setOriginalHash(full?.targetHash ?? '')
+          setChainContents({})
+          void loadChainContents(workspaceId, full)
+          setNotice(null)
+        },
+        [loadChainContents],
+      )
 
       const boot = useCallback(async () => {
         setStatus('loading')
@@ -504,75 +737,63 @@ window.__ModuleLoader__.load({
       }, [boot])
 
       const save = useCallback(
-        async (mode) => {
+        async (mode, options = {}) => {
           if (!API || saving || !dirty) return false
+          if (conflict !== null && options.force !== true) return false
+          const baseHash = options.force === true ? '' : originalHash
           setSaving(true)
           setNotice(null)
           try {
+            let result
             if (active.kind === 'project' && typeof active.id === 'string') {
+              result =
+                editingPath !== null
+                  ? await unwrap(API.saveFile(active.id, editingPath, draft, baseHash))
+                  : await unwrap(API.saveProject(active.id, draft, baseHash))
+            } else {
+              result = await unwrap(API.saveGlobal(draft, baseHash))
+            }
+            if (result !== null && typeof result === 'object' && result.stale === true) {
+              setConflict({ current: result.current ?? null })
+              setNotice({ kind: 'error', text: tr('conflictDetected') })
+              return false
+            }
+            setConflict(null)
+            if (active.kind === 'project' && typeof active.id === 'string') {
+              const full = result?.project
+              setProject(full)
+              setState((previous) =>
+                previous === null
+                  ? previous
+                  : {
+                      ...previous,
+                      projects: previous.projects.map((item) =>
+                        item.id === active.id
+                          ? { ...item, targetExists: full?.targetExists, bytes: full?.bytes, mtime: full?.mtime }
+                          : item,
+                      ),
+                    },
+              )
               if (editingPath !== null) {
-                const result = await unwrap(API.saveFile(active.id, editingPath, draft))
-                if (draft.trim().length > 0 && result?.file?.exists !== true) {
-                  throw new Error(`${tr('saveNotWritten')}: ${editingPath}`)
-                }
-                const full = result?.project
-                setProject(full)
-                setState((previous) =>
-                  previous === null
-                    ? previous
-                    : {
-                        ...previous,
-                        projects: previous.projects.map((item) =>
-                          item.id === active.id
-                            ? {
-                                ...item,
-                                targetExists: full?.targetExists,
-                                bytes: full?.bytes,
-                                mtime: full?.mtime,
-                              }
-                            : item,
-                        ),
-                      },
-                )
                 setDraft(result?.file?.content ?? '')
                 setOriginal(result?.file?.content ?? '')
+                setOriginalHash(result?.file?.hash ?? '')
                 if (result?.file?.exists !== true && editingPath !== full?.targetPath) {
                   setEditingPath(null)
                   setDraft(full?.content ?? '')
                   setOriginal(full?.content ?? '')
+                  setOriginalHash(full?.targetHash ?? '')
                 }
               } else {
-                const full = await unwrap(API.saveProject(active.id, draft))
-                if (draft.trim().length > 0 && full?.targetExists !== true) {
-                  throw new Error(`${tr('saveNotWritten')}: ${full?.targetPath ?? active.id}`)
-                }
-                setProject(full)
                 setDraft(full?.content ?? draft)
                 setOriginal(full?.content ?? draft)
-                setState((previous) =>
-                  previous === null
-                    ? previous
-                    : {
-                        ...previous,
-                        projects: previous.projects.map((item) =>
-                          item.id === active.id
-                            ? {
-                                ...item,
-                                targetExists: full.targetExists,
-                                bytes: full.bytes,
-                                mtime: full.mtime,
-                              }
-                            : item,
-                        ),
-                      },
-                )
+                setOriginalHash(full?.targetHash ?? '')
               }
+              void loadChainContents(active.id, full)
             } else {
-              const global = await unwrap(API.saveGlobal(draft))
-              if (draft.trim().length > 0 && global?.exists !== true) {
-                throw new Error(`${tr('saveNotWritten')}: ${global?.path ?? '~/.dsh/AGENTS.md'}`)
-              }
+              const global = result?.global
               setOriginal(draft)
+              setOriginalHash(global?.hash ?? '')
               setState((previous) =>
                 previous === null ? previous : { ...previous, global: { ...previous.global, ...global } },
               )
@@ -588,20 +809,102 @@ window.__ModuleLoader__.load({
             setSaving(false)
           }
         },
-        [active, draft, dirty, editingPath, saving, sessionId, fetchSessionStatus],
+        [
+          active,
+          draft,
+          dirty,
+          editingPath,
+          saving,
+          sessionId,
+          fetchSessionStatus,
+          loadChainContents,
+          originalHash,
+          conflict,
+        ],
       )
       saveRef.current = save
 
       // Auto-save: 800ms after the last edit, write straight into the file the
       // official engine reads, so a forgotten Save click cannot lose content.
       useEffect(() => {
-        if (!dirty || saving || status !== 'ready') return undefined
+        if (!dirty || saving || status !== 'ready' || conflict !== null) return undefined
         const timer = setTimeout(() => {
           const current = saveRef.current
           if (typeof current === 'function') current('auto')
         }, 800)
         return () => clearTimeout(timer)
-      }, [draft, dirty, saving, status, active.kind, active.id, editingPath])
+      }, [draft, dirty, saving, status, active.kind, active.id, editingPath, conflict])
+
+      // Detect external edits when the window regains focus.
+      useEffect(() => {
+        const onFocus = () => {
+          if (status !== 'ready' || saving) return
+          ;(async () => {
+            try {
+              if (active.kind === 'global') {
+                const next = await unwrap(API.getState())
+                setState(next)
+                const diskHash = next?.global?.hash ?? ''
+                if (diskHash !== originalHash) {
+                  if (!dirty) {
+                    setDraft(next?.global?.content ?? '')
+                    setOriginal(next?.global?.content ?? '')
+                    setOriginalHash(diskHash)
+                    setNotice({ kind: 'ok', text: tr('restoredFromDisk') })
+                  } else {
+                    setConflict({ current: { content: next?.global?.content ?? '', hash: diskHash } })
+                  }
+                }
+              } else if (editingPath !== null) {
+                const file = await unwrap(API.readFile(active.id, editingPath))
+                const diskHash = file?.hash ?? ''
+                if (diskHash !== originalHash) {
+                  if (!dirty) {
+                    setDraft(file?.content ?? '')
+                    setOriginal(file?.content ?? '')
+                    setOriginalHash(diskHash)
+                    setNotice({ kind: 'ok', text: tr('restoredFromDisk') })
+                  } else {
+                    setConflict({ current: { content: file?.content ?? '', hash: diskHash } })
+                  }
+                }
+              } else if (project !== null) {
+                const full = await unwrap(API.readProject(active.id))
+                const diskHash = full?.targetHash ?? ''
+                if (diskHash !== originalHash) {
+                  if (!dirty) {
+                    setProject(full)
+                    setDraft(full?.content ?? '')
+                    setOriginal(full?.content ?? '')
+                    setOriginalHash(diskHash)
+                    void loadChainContents(active.id, full)
+                    setNotice({ kind: 'ok', text: tr('restoredFromDisk') })
+                  } else {
+                    setConflict({ current: { content: full?.content ?? '', hash: diskHash } })
+                  }
+                }
+              }
+              if (sessionId !== null) fetchSessionStatus(sessionId)
+            } catch (error) {
+              console.warn('[dsh-instructions] external change check failed', error)
+            }
+          })()
+        }
+        window.addEventListener('focus', onFocus)
+        return () => window.removeEventListener('focus', onFocus)
+      }, [
+        active.kind,
+        active.id,
+        editingPath,
+        dirty,
+        originalHash,
+        project,
+        status,
+        saving,
+        sessionId,
+        fetchSessionStatus,
+        loadChainContents,
+      ])
 
       const flush = async () => {
         if (!API) return true
@@ -638,6 +941,26 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const reloadConflict = async () => {
+        setConflict(null)
+        try {
+          if (active.kind === 'global') {
+            const next = await unwrap(API.getState())
+            applyGlobal(next)
+          } else if (editingPath !== null) {
+            const file = await unwrap(API.readFile(active.id, editingPath))
+            setDraft(file?.content ?? '')
+            setOriginal(file?.content ?? '')
+            setOriginalHash(file?.hash ?? '')
+          } else {
+            await loadProject(active.id)
+          }
+          setNotice({ kind: 'ok', text: tr('restoredFromDisk') })
+        } catch (error) {
+          setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        }
+      }
+
       const selectGlobal = async () => {
         if (!(await flush())) return
         applyGlobal(state)
@@ -661,6 +984,9 @@ window.__ModuleLoader__.load({
           setEditingPath(file.filePath)
           setDraft(file.content ?? '')
           setOriginal(file.content ?? '')
+          setOriginalHash(file.hash ?? '')
+          setConflict(null)
+          setHistoryOpen(false)
           setNotice(null)
         } catch (error) {
           setNotice({ kind: 'error', text: String(error?.message ?? error) })
@@ -673,6 +999,173 @@ window.__ModuleLoader__.load({
           await loadProject(active.id)
         } catch (error) {
           setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        }
+      }
+
+      const historyTarget = () => ({
+        workspaceId: active.kind === 'global' ? '' : active.id ?? '',
+        filePath: active.kind === 'global' ? '' : editingPath ?? project?.targetPath ?? '',
+      })
+
+      const refreshHistory = async () => {
+        try {
+          setHistoryLoading(true)
+          const target = historyTarget()
+          if (target.filePath === '' && active.kind !== 'global') {
+            setHistoryEntries([])
+            return
+          }
+          const result = await unwrap(API.listHistory(target.workspaceId, target.filePath))
+          setHistoryEntries(Array.isArray(result?.entries) ? result.entries : [])
+        } catch (error) {
+          setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        } finally {
+          setHistoryLoading(false)
+        }
+      }
+
+      const openHistory = async () => {
+        setHistoryOpen(true)
+        await refreshHistory()
+      }
+
+      const restoreHistoryEntry = async (entry) => {
+        if (!window.confirm(tr('restoreConfirm'))) return
+        try {
+          const target = historyTarget()
+          const result = await unwrap(API.restoreHistory(target.workspaceId, target.filePath, entry.id))
+          setHistoryEntries(Array.isArray(result?.entries) ? result.entries : [])
+          if (active.kind === 'global') {
+            const next = await unwrap(API.getState())
+            applyGlobal(next)
+          } else {
+            const full = await unwrap(API.readProject(active.id))
+            setProject(full)
+            if (editingPath !== null) {
+              setDraft(result?.file?.content ?? '')
+              setOriginal(result?.file?.content ?? '')
+              setOriginalHash(result?.file?.hash ?? '')
+            } else {
+              setDraft(full?.content ?? '')
+              setOriginal(full?.content ?? '')
+              setOriginalHash(full?.targetHash ?? '')
+            }
+            setState((previous) =>
+              previous === null
+                ? previous
+                : {
+                    ...previous,
+                    projects: previous.projects.map((item) =>
+                      item.id === active.id
+                        ? { ...item, targetExists: full?.targetExists, bytes: full?.bytes, mtime: full?.mtime }
+                        : item,
+                    ),
+                  },
+            )
+            void loadChainContents(active.id, full)
+          }
+          setNotice({ kind: 'ok', text: tr('restored') })
+        } catch (error) {
+          setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        }
+      }
+
+      const insertTemplate = (template) => {
+        const text = activeLanguage() === 'en' ? template.en : template.zh
+        const separator =
+          draft.length === 0 ? '' : draft.endsWith('\n\n') ? '' : draft.endsWith('\n') ? '\n' : '\n\n'
+        setDraft(draft + separator + text)
+        setNotice({ kind: 'ok', text: tr('templateInserted') })
+        setTemplatesOpen(false)
+      }
+
+      const exportAll = async () => {
+        if (!API || exporting) return
+        setExporting(true)
+        setNotice(null)
+        try {
+          const next = await unwrap(API.getState())
+          const projects = []
+          for (const item of next.projects) {
+            try {
+              const full = await unwrap(API.readProject(item.id))
+              projects.push({
+                id: item.id,
+                title: item.title,
+                path: item.path,
+                filePath: full?.targetPath ?? '',
+                content: full?.content ?? '',
+              })
+            } catch (error) {
+              projects.push({ id: item.id, title: item.title, path: item.path, error: String(error?.message ?? error) })
+            }
+          }
+          const payload = {
+            format: 'dsh-instructions/v1',
+            exportedAt: new Date().toISOString(),
+            global: { path: next.global?.path ?? '', content: next.global?.content ?? '' },
+            projects,
+          }
+          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+          const url = URL.createObjectURL(blob)
+          const anchor = document.createElement('a')
+          anchor.href = url
+          anchor.download = `dsh-instructions-${new Date().toISOString().slice(0, 10)}.json`
+          document.body.appendChild(anchor)
+          anchor.click()
+          anchor.remove()
+          setTimeout(() => URL.revokeObjectURL(url), 1000)
+          setNotice({ kind: 'ok', text: tr('exportDone') })
+        } catch (error) {
+          setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        } finally {
+          setExporting(false)
+        }
+      }
+
+      const handleImportFile = async (event) => {
+        const file = event?.target?.files?.[0]
+        if (event?.target) event.target.value = ''
+        if (!file) return
+        if (!window.confirm(tr('importConfirm'))) return
+        setImporting(true)
+        setNotice(null)
+        try {
+          const text = await file.text()
+          const payload = JSON.parse(text)
+          if (payload === null || typeof payload !== 'object' || payload.format !== 'dsh-instructions/v1') {
+            throw new Error(tr('importInvalid'))
+          }
+          const next = await unwrap(API.getState())
+          let written = 0
+          let skipped = 0
+          if (typeof payload.global?.content === 'string') {
+            await unwrap(API.saveGlobal(payload.global.content, ''))
+            written += 1
+          }
+          for (const entry of Array.isArray(payload.projects) ? payload.projects : []) {
+            const match =
+              next.projects.find((item) => item.path === entry?.path) ??
+              next.projects.find((item) => item.id === entry?.id)
+            if (match === undefined || typeof entry?.content !== 'string') {
+              skipped += 1
+              continue
+            }
+            await unwrap(API.saveProject(match.id, entry.content, ''))
+            written += 1
+          }
+          const refreshed = await unwrap(API.getState())
+          if (active.kind === 'project') {
+            setState(refreshed)
+            await loadProject(active.id)
+          } else {
+            applyGlobal(refreshed)
+          }
+          setNotice({ kind: 'ok', text: `${tr('importDone')} (${written} / ${skipped})` })
+        } catch (error) {
+          setNotice({ kind: 'error', text: String(error?.message ?? error) })
+        } finally {
+          setImporting(false)
         }
       }
 
@@ -714,11 +1207,7 @@ window.__ModuleLoader__.load({
           h('code', { className: 'dwi-path-value', title: filePath }, filePath),
           h(
             'button',
-            {
-              type: 'button',
-              className: 'dwi-btn small',
-              onClick: () => copyText(filePath),
-            },
+            { type: 'button', className: 'dwi-btn small', onClick: () => copyText(filePath) },
             tr('copyPath'),
           ),
         )
@@ -767,44 +1256,31 @@ window.__ModuleLoader__.load({
           ),
         )
 
-      const previewBlock = (label, filePath, content, key) => {
-        const text = String(content ?? '')
-        if (text.trim().length === 0) return null
-        return h(
-          'div',
-          { className: 'dwi-preview-block', key },
-          h('div', { className: 'dwi-preview-head' }, `${label} · ${filePath}`),
-          h('pre', { className: 'dwi-preview' }, text),
-        )
+      const injectionBlocks = () => {
+        const blocks = []
+        const globalText = active.kind === 'global' ? draft : globalSavedContent
+        if (globalText.trim().length > 0) {
+          blocks.push({ label: `${tr('previewLabelGlobal')} · ~/.dsh/AGENTS.md`, text: globalText })
+        }
+        if (active.kind === 'project' && project !== null) {
+          for (const entry of projectChain) {
+            const text =
+              entry.absolutePath === currentFilePath ? draft : chainContents[entry.absolutePath] ?? ''
+            if (text.trim().length > 0) {
+              blocks.push({ label: `${tr('scopeProject')} · ${entry.displayPath}`, text })
+            }
+          }
+        }
+        return blocks
       }
 
-      const injectionCard = (options) => {
-        const blocks = []
-        const globalBlock = previewBlock(
-          tr('previewLabelGlobal'),
-          '~/.dsh/AGENTS.md',
-          options.globalText,
-          'preview-global',
-        )
-        if (globalBlock !== null) blocks.push(globalBlock)
-        const projectBlock = previewBlock(
-          tr('previewLabelProject'),
-          options.projectPath ?? '',
-          options.projectText,
-          'preview-project',
-        )
-        if (projectBlock !== null) blocks.push(projectBlock)
-        const others = Array.isArray(options.others) ? options.others : []
-        const copySource = [
-          String(options.globalText ?? '').trim().length > 0
-            ? `${tr('previewLabelGlobal')}\n${options.globalText}`
-            : '',
-          String(options.projectText ?? '').trim().length > 0
-            ? `${tr('previewLabelProject')} (${options.projectPath ?? ''})\n${options.projectText}`
-            : '',
-        ]
-          .filter((part) => part.length > 0)
-          .join('\n\n')
+      const injectionCard = () => {
+        const blocks = injectionBlocks()
+        const totalBytes = blocks.reduce((sum, block) => sum + byteLength(block.text), 0)
+        const totalTokens = blocks.reduce((sum, block) => sum + estimateTokens(block.text), 0)
+        const budget = Number(state?.budgetBytes) > 0 ? Number(state.budgetBytes) : 65536
+        const percent = Math.min(100, (totalBytes / budget) * 100)
+        const copySource = blocks.map((block) => `${block.label}\n${block.text}`).join('\n\n')
         return h(
           'div',
           { className: 'dwi-card' },
@@ -827,14 +1303,23 @@ window.__ModuleLoader__.load({
             ),
           ),
           h('p', { className: 'dwi-hint' }, tr('injectionHint')),
-          blocks.length > 0 ? blocks : h('p', { className: 'dwi-empty' }, tr('injectionEmpty')),
-          others.length > 0
-            ? h(
-                'p',
-                { className: 'dwi-hint' },
-                `${tr('previewOtherLabel')}: ${others.map((entry) => entry.displayPath).join(' · ')}`,
+          blocks.length > 0
+            ? blocks.map((block, index) =>
+                h(
+                  'div',
+                  { className: 'dwi-preview-block', key: `${block.label}:${index}` },
+                  h('div', { className: 'dwi-preview-head' }, block.label),
+                  h('pre', { className: 'dwi-preview' }, block.text),
+                ),
               )
-            : null,
+            : h('p', { className: 'dwi-empty' }, tr('injectionEmpty')),
+          h(
+            'div',
+            { className: 'dwi-token-line' + (percent > 80 ? ' warn' : '') },
+            `${formatBytes(totalBytes)} · ${tr('tokenEstimate')} ≈ ${totalTokens} tokens · ${tr(
+              'budgetUsage',
+            )} ${percent.toFixed(1)}% / ${formatBytes(budget)}`,
+          ),
         )
       }
 
@@ -862,6 +1347,15 @@ window.__ModuleLoader__.load({
                       : '?'
                 }`,
               ),
+              h(
+                'p',
+                { className: 'dwi-hint' },
+                `${tr('lastInjected')}: ${
+                  sessionStatus.lastAt ? new Date(sessionStatus.lastAt).toLocaleString() : '—'
+                } · ${sessionStatus.messages ?? 0} ${tr('messagesUnit')} · ${
+                  sessionStatus.baseline ? tr('baselineOn') : tr('baselineOff')
+                }`,
+              ),
             ),
             h(
               'span',
@@ -882,6 +1376,140 @@ window.__ModuleLoader__.load({
             : null,
         )
       }
+
+      const conflictBanner =
+        conflict !== null
+          ? h(
+              'div',
+              { className: 'dwi-banner warn dwi-conflict' },
+              h(
+                'div',
+                null,
+                h('strong', null, tr('conflictDetected')),
+                h('p', { className: 'dwi-hint' }, tr('conflictBody')),
+              ),
+              h(
+                'div',
+                { className: 'dwi-conflict-actions' },
+                h('button', { type: 'button', className: 'dwi-btn', onClick: reloadConflict }, tr('reloadFromDisk')),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dwi-btn primary',
+                    onClick: () => saveRef.current?.('manual', { force: true }),
+                  },
+                  tr('overwrite'),
+                ),
+              ),
+            )
+          : null
+
+      const historyCard =
+        historyOpen
+          ? h(
+              'div',
+              { className: 'dwi-card' },
+              h(
+                'div',
+                { className: 'dwi-card-head' },
+                h(
+                  'div',
+                  null,
+                  h('h3', { className: 'dwi-card-title' }, tr('historyTitle')),
+                  h('p', { className: 'dwi-hint' }, tr('historyHint')),
+                ),
+                h(
+                  'div',
+                  { className: 'dwi-head-actions' },
+                  h(
+                    'button',
+                    { type: 'button', className: 'dwi-btn small', onClick: refreshHistory, disabled: historyLoading },
+                    tr('historyRefresh'),
+                  ),
+                  h('button', { type: 'button', className: 'dwi-btn small', onClick: () => setHistoryOpen(false) }, tr('close')),
+                ),
+              ),
+              historyLoading
+                ? h('p', { className: 'dwi-empty' }, tr('loading'))
+                : historyEntries.length === 0
+                  ? h('p', { className: 'dwi-empty' }, tr('historyEmpty'))
+                  : h(
+                      'ul',
+                      { className: 'dwi-history-list' },
+                      historyEntries.map((entry) =>
+                        h(
+                          'li',
+                          { key: entry.id, className: 'dwi-history-row' },
+                          h(
+                            'div',
+                            { className: 'dwi-history-main' },
+                            h(
+                              'div',
+                              { className: 'dwi-history-meta' },
+                              `${new Date(entry.savedAt).toLocaleString()} · ${formatBytes(entry.bytes)}`,
+                            ),
+                            h('pre', { className: 'dwi-history-preview' }, entry.preview),
+                          ),
+                          h(
+                            'button',
+                            { type: 'button', className: 'dwi-btn small', onClick: () => restoreHistoryEntry(entry) },
+                            tr('restore'),
+                          ),
+                        ),
+                      ),
+                    ),
+            )
+          : null
+
+      const templatesCard = templatesOpen
+        ? h(
+            'div',
+            { className: 'dwi-card' },
+            h(
+              'div',
+              { className: 'dwi-card-head' },
+              h(
+                'div',
+                null,
+                h('h3', { className: 'dwi-card-title' }, tr('templates')),
+                h('p', { className: 'dwi-hint' }, tr('templatesHint')),
+              ),
+              h(
+                'button',
+                { type: 'button', className: 'dwi-btn small', onClick: () => setTemplatesOpen(false) },
+                tr('close'),
+              ),
+            ),
+            TEMPLATE_GROUPS.map((group) =>
+              h(
+                'div',
+                { className: 'dwi-template-group', key: group.id },
+                h(
+                  'div',
+                  { className: 'dwi-template-group-title' },
+                  activeLanguage() === 'en' ? group.en : group.zh,
+                ),
+                h(
+                  'div',
+                  { className: 'dwi-template-list' },
+                  TEMPLATES.filter((template) => template.group === group.id).map((template) =>
+                    h(
+                      'button',
+                      {
+                        key: template.id,
+                        type: 'button',
+                        className: 'dwi-template-item',
+                        onClick: () => insertTemplate(template),
+                      },
+                      activeLanguage() === 'en' ? template.en : template.zh,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : null
 
       const engineBanner =
         sessionStatus !== null && sessionStatus.engineActive === false
@@ -971,6 +1599,7 @@ window.__ModuleLoader__.load({
           { className: 'dwi-main' },
           engineBanner,
           sessionCard(),
+          conflictBanner,
           globalInfo?.exists !== true ? h('div', { className: 'dwi-banner warn' }, tr('globalMissingWarn')) : null,
           h(
             'div',
@@ -985,9 +1614,19 @@ window.__ModuleLoader__.load({
                 h('p', { className: 'dwi-hint' }, tr('globalHint')),
               ),
               h(
-                'span',
-                { className: 'dwi-badge' + (globalInfo?.exists ? '' : ' muted') },
-                globalInfo?.exists ? tr('injectedBadge') : tr('notInjectedBadge'),
+                'div',
+                { className: 'dwi-head-actions' },
+                h(
+                  'button',
+                  { type: 'button', className: 'dwi-btn small', onClick: () => setTemplatesOpen((value) => !value) },
+                  tr('templates'),
+                ),
+                h('button', { type: 'button', className: 'dwi-btn small', onClick: openHistory }, tr('history')),
+                h(
+                  'span',
+                  { className: 'dwi-badge' + (globalInfo?.exists ? '' : ' muted') },
+                  globalInfo?.exists ? tr('injectedBadge') : tr('notInjectedBadge'),
+                ),
               ),
             ),
             pathRow(tr('globalFile'), globalInfo?.path ?? '~/.dsh/AGENTS.md', 'global-path'),
@@ -1003,10 +1642,14 @@ window.__ModuleLoader__.load({
               onKeyDown: onEditorKeyDown,
             }),
             editorFooter(
-              `${draft.length} ${tr('chars')} · ${formatBytes(byteLength(draft))} · 64 KB budget`,
+              `${draft.length} ${tr('chars')} · ${formatBytes(byteLength(draft))} · ${tr('tokenEstimate')} ≈ ${estimateTokens(
+                draft,
+              )} tokens · 64 KB budget`,
             ),
           ),
-          injectionCard({ globalText: draft }),
+          historyCard,
+          templatesCard,
+          injectionCard(),
           globalInfo?.sharedExists
             ? h(
                 'div',
@@ -1020,14 +1663,12 @@ window.__ModuleLoader__.load({
       } else if (project === null) {
         main = h('section', { className: 'dwi-main' }, h('p', { className: 'dwi-empty' }, tr('loading')))
       } else {
-        const others = projectChain.filter(
-          (entry) => entry.scope === 'project' && entry.absolutePath !== currentFilePath,
-        )
         main = h(
           'section',
           { className: 'dwi-main' },
           engineBanner,
           sessionCard(),
+          conflictBanner,
           currentFileExists ? null : h('div', { className: 'dwi-banner warn' }, tr('projectMissingWarn')),
           h(
             'div',
@@ -1043,11 +1684,7 @@ window.__ModuleLoader__.load({
                   { className: 'dwi-card-title' },
                   editingPath === null ? project.title : `${tr('editingFile')} · ${shortPath(editingPath)}`,
                 ),
-                h(
-                  'p',
-                  { className: 'dwi-hint' },
-                  editingPath === null ? tr('projectHint') : tr('editingHint'),
-                ),
+                h('p', { className: 'dwi-hint' }, editingPath === null ? tr('projectHint') : tr('editingHint')),
                 h('p', { className: 'dwi-hint' }, project.path),
                 h(
                   'p',
@@ -1068,6 +1705,12 @@ window.__ModuleLoader__.load({
                     )
                   : null,
                 h(
+                  'button',
+                  { type: 'button', className: 'dwi-btn small', onClick: () => setTemplatesOpen((value) => !value) },
+                  tr('templates'),
+                ),
+                h('button', { type: 'button', className: 'dwi-btn small', onClick: openHistory }, tr('history')),
+                h(
                   'span',
                   { className: 'dwi-badge' + (currentFileExists ? '' : ' muted') },
                   currentFileExists ? tr('injectedBadge') : tr('notInjectedBadge'),
@@ -1087,15 +1730,14 @@ window.__ModuleLoader__.load({
               onKeyDown: onEditorKeyDown,
             }),
             editorFooter(
-              `${draft.length} ${tr('chars')} · ${formatBytes(byteLength(draft))} · 64 KB budget`,
+              `${draft.length} ${tr('chars')} · ${formatBytes(byteLength(draft))} · ${tr('tokenEstimate')} ≈ ${estimateTokens(
+                draft,
+              )} tokens · 64 KB budget`,
             ),
           ),
-          injectionCard({
-            globalText: globalSavedContent,
-            projectPath: currentFilePath || project.targetPath,
-            projectText: draft,
-            others,
-          }),
+          historyCard,
+          templatesCard,
+          injectionCard(),
           h(
             'div',
             { className: 'dwi-card' },
@@ -1165,9 +1807,30 @@ window.__ModuleLoader__.load({
             h('p', { className: 'dwi-hint' }, tr('budget')),
           ),
           h(
-            'button',
-            { type: 'button', className: 'dwi-btn', onClick: refresh, disabled: status === 'loading' || saving },
-            tr('refresh'),
+            'div',
+            { className: 'dwi-head-actions' },
+            h(
+              'button',
+              { type: 'button', className: 'dwi-btn', onClick: refresh, disabled: status === 'loading' || saving },
+              tr('refresh'),
+            ),
+            h(
+              'button',
+              { type: 'button', className: 'dwi-btn', onClick: exportAll, disabled: exporting || importing },
+              exporting ? tr('loading') : tr('export'),
+            ),
+            h(
+              'button',
+              { type: 'button', className: 'dwi-btn', onClick: () => importInputRef.current?.click(), disabled: exporting || importing },
+              importing ? tr('loading') : tr('import'),
+            ),
+            h('input', {
+              ref: importInputRef,
+              type: 'file',
+              accept: 'application/json,.json',
+              className: 'dwi-hidden-input',
+              onChange: handleImportFile,
+            }),
           ),
         ),
         h('div', { className: 'dwi-body' }, nav, main),
@@ -1238,6 +1901,25 @@ window.__ModuleLoader__.load({
 .dwi-head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .dwi-chain-row.current{border-color:var(--dsw-alias-brand-primary)}
 .dwi-header-action.warn{border-color:var(--dsw-alias-state-warn-primary);color:var(--dsw-alias-state-warn-primary)}
+.dwi-history-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.dwi-history-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-base)}
+.dwi-history-main{min-width:0;flex:1}
+.dwi-history-meta{font-size:11px;color:var(--dsw-alias-label-secondary)}
+.dwi-history-preview{margin:4px 0 0;max-height:72px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary)}
+.dwi-conflict{display:flex;flex-direction:column;gap:8px}
+.dwi-conflict-actions{display:flex;gap:8px;flex-wrap:wrap}
+.dwi-token-line{margin-top:10px;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
+.dwi-token-line.warn{color:var(--dsw-alias-state-warn-primary)}
+.dwi-template-group{margin-top:12px}
+.dwi-template-group-title{margin-bottom:6px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}
+.dwi-template-list{display:flex;flex-direction:column;gap:6px}
+.dwi-template-item{display:block;width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:1.55;text-align:left;cursor:pointer}
+.dwi-template-item:hover{border-color:var(--dsw-alias-brand-primary)}
+.dwi-hidden-input{display:none}
+.dwi-settings-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0}
+.dwi-settings-text{min-width:0}
+.dwi-settings-title{font-size:13px;font-weight:600;line-height:1.4}
+.dwi-settings-desc{margin-top:2px;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary)}
 .dwi-header-action{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:1.5;cursor:pointer}
 .dwi-header-action:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dwi-header-action:disabled{opacity:.55;cursor:default}
@@ -1304,6 +1986,28 @@ window.__ModuleLoader__.load({
               label: () => tr('headerAction'),
             },
             HeaderAction,
+          ),
+        )
+        ctx.slots.inject('settings.general.item', () =>
+          ctx.slots.register(
+            {
+              name: 'settings.general.item',
+              id: 'instructions',
+              order: 60,
+              label: () => tr('panel'),
+            },
+            SettingsInstructionRow,
+          ),
+        )
+        ctx.slots.inject('conversation.hero.options', () =>
+          ctx.slots.register(
+            {
+              name: 'conversation.hero.options',
+              id: 'instructions',
+              order: 10,
+              label: () => tr('headerAction'),
+            },
+            HeroInstructionOption,
           ),
         )
       },

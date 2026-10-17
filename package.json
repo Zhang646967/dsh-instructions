@@ -1,6 +1,6 @@
 {
   "name": "dsh-instructions",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "前置指令管理：编辑全局与项目 AGENTS.md，桌面版官方注入引擎自动读取",

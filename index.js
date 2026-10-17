@@ -1,14 +1,14 @@
 /**
  * dsh-instructions — host half.
  *
- * This plugin owns no prompt injection of its own: the shipped
- * `@deepseek-ai/dsh-agent-instructions` preset plugin already injects
- * <workspace instructions> from AGENTS.md files. This host half resolves the
- * effective instruction chain, reads/writes the very files that engine
- * consumes, exposes the two editors to the Web UI, and offers an agent tool
- * plus a human command for the same operations.
+ * The plugin owns no prompt injection of its own: the shipped
+ * `@deepseek-ai/dsh-agent-instructions` preset plugin injects AGENTS.md as
+ * durable context. This host half resolves the effective chain, edits the
+ * files that engine consumes (with history + stale-write protection), exposes
+ * the editors to the Web UI, and offers an agent tool plus a human command.
  */
 import { promises as fsp } from 'node:fs'
+import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import TYPERT from './typert.host.js'
@@ -20,6 +20,7 @@ const BASE_CANDIDATES = ['AGENTS.md', 'CLAUDE.md']
 const LOCAL_CANDIDATES = ['AGENTS.local.md', 'CLAUDE.local.md']
 /** Presets that mount the built-in agent-instructions engine (see dsh-web-app). */
 const ENGINE_PRESETS = new Set(['standard', 'ptc', 'cordis'])
+const HISTORY_LIMIT = 20
 
 function dshHome() {
   const fromEnv = process.env.DSH_HOME
@@ -33,11 +34,15 @@ function agentsHome() {
   return path.join(os.homedir(), '.agents')
 }
 
+function hashContent(content) {
+  return createHash('sha1').update(content, 'utf8').digest('hex')
+}
+
 async function readFileInfo(filePath) {
   try {
     const stat = await fsp.stat(filePath)
     if (!stat.isFile()) {
-      return { path: filePath, exists: false, bytes: 0, mtime: 0, content: '' }
+      return { path: filePath, exists: false, bytes: 0, mtime: 0, hash: '', content: '' }
     }
     const content = await fsp.readFile(filePath, 'utf8')
     return {
@@ -45,10 +50,11 @@ async function readFileInfo(filePath) {
       exists: true,
       bytes: Buffer.byteLength(content, 'utf8'),
       mtime: stat.mtimeMs,
+      hash: hashContent(content),
       content,
     }
   } catch {
-    return { path: filePath, exists: false, bytes: 0, mtime: 0, content: '' }
+    return { path: filePath, exists: false, bytes: 0, mtime: 0, hash: '', content: '' }
   }
 }
 
@@ -62,9 +68,23 @@ async function probeFile(filePath) {
   }
 }
 
-async function writeFileText(filePath, content) {
+/** Atomic write: a temp sibling then rename, so a crash cannot truncate the file. */
+async function writeFileAtomic(filePath, content) {
   await fsp.mkdir(path.dirname(filePath), { recursive: true })
-  await fsp.writeFile(filePath, content, 'utf8')
+  const temp = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`
+  try {
+    await fsp.writeFile(temp, content, 'utf8')
+    await fsp.rename(temp, filePath)
+  } catch (error) {
+    try {
+      await fsp.unlink(temp)
+    } catch {
+      /* ignore */
+    }
+    throw error
+  }
 }
 
 /**
@@ -82,7 +102,7 @@ async function writeOrDeleteFile(filePath, content) {
     }
     return
   }
-  await writeFileText(filePath, content)
+  await writeFileAtomic(filePath, content)
 }
 
 async function findProjectRoot(start) {
@@ -139,11 +159,66 @@ function messageText(content) {
   return parts.join('')
 }
 
+function insidePath(root, target) {
+  if (typeof root !== 'string' || root.length === 0) return false
+  const resolvedRoot = path.resolve(root)
+  const resolvedTarget = path.resolve(target)
+  return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)
+}
+
+
+/**
+ * Small line-oriented diff used by the agent tool's dry-run `validate` action.
+ * LCS over lines when the inputs are small; otherwise a bounded summary.
+ */
+function simpleLineDiff(before, after) {
+  const a = String(before ?? '').split('\n')
+  const b = String(after ?? '').split('\n')
+  if (a.length > 1200 || b.length > 1200) {
+    return `(files too large for inline diff: ${a.length} -> ${b.length} lines)`
+  }
+  const rows = a.length + 1
+  const cols = b.length + 1
+  const table = Array.from({ length: rows }, () => new Uint16Array(cols))
+  for (let i = a.length - 1; i >= 0; i -= 1) {
+    for (let j = b.length - 1; j >= 0; j -= 1) {
+      table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1])
+    }
+  }
+  const lines = []
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      lines.push(`  ${a[i]}`)
+      i += 1
+      j += 1
+    } else if (table[i + 1][j] >= table[i][j + 1]) {
+      lines.push(`- ${a[i]}`)
+      i += 1
+    } else {
+      lines.push(`+ ${b[j]}`)
+      j += 1
+    }
+  }
+  while (i < a.length) {
+    lines.push(`- ${a[i]}`)
+    i += 1
+  }
+  while (j < b.length) {
+    lines.push(`+ ${b[j]}`)
+    j += 1
+  }
+  const text = lines.join('\n')
+  return text.length > 20000 ? `${text.slice(0, 20000)}\n… (diff truncated)` : text
+}
+
 export function apply(ctx) {
   const home = dshHome()
   const sharedHome = agentsHome()
   const globalPath = path.join(home, 'AGENTS.md')
   const sharedGlobalPath = path.join(sharedHome, 'AGENTS.md')
+  const historyRoot = path.join(home, 'storages', 'dsh-instructions', 'history')
 
   const getSession = (sessionId) => {
     try {
@@ -266,6 +341,7 @@ export function apply(ctx) {
     return {
       ...summary,
       content: targetFull.exists ? targetFull.content : '',
+      targetHash: targetFull.hash,
       chain,
       evidence: {
         baseCandidates: BASE_CANDIDATES,
@@ -283,6 +359,7 @@ export function apply(ctx) {
       exists: info.exists,
       bytes: info.bytes,
       mtime: info.mtime,
+      hash: info.hash,
       content: info.content,
       sharedPath: sharedGlobalPath,
       sharedExists: shared.exists,
@@ -319,6 +396,154 @@ export function apply(ctx) {
       engine: '@deepseek-ai/dsh-agent-instructions',
       home,
       sharedHome,
+      historyLimit: HISTORY_LIMIT,
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // History snapshots: every accepted save archives the previous content.
+  // -------------------------------------------------------------------------
+  const historyDirFor = (target) => path.join(historyRoot, hashContent(target).slice(0, 16))
+
+  const archiveHistory = async (target, content) => {
+    if (typeof content !== 'string' || content.length === 0) return
+    const dir = historyDirFor(target)
+    await fsp.mkdir(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    await fsp.writeFile(path.join(dir, `${stamp}.md`), content, 'utf8')
+    let names = []
+    try {
+      names = await fsp.readdir(dir)
+    } catch {
+      return
+    }
+    const snapshots = names.filter((name) => name.endsWith('.md')).sort().reverse()
+    for (const stale of snapshots.slice(HISTORY_LIMIT)) {
+      await fsp.unlink(path.join(dir, stale)).catch(() => {})
+    }
+  }
+
+  const listHistoryFor = async (target) => {
+    const dir = historyDirFor(target)
+    let names = []
+    try {
+      names = await fsp.readdir(dir)
+    } catch {
+      return []
+    }
+    const entries = []
+    for (const name of names.filter((item) => item.endsWith('.md')).sort().reverse().slice(0, HISTORY_LIMIT)) {
+      const filePath = path.join(dir, name)
+      try {
+        const stat = await fsp.stat(filePath)
+        const content = await fsp.readFile(filePath, 'utf8')
+        entries.push({
+          id: name,
+          savedAt: stat.mtimeMs,
+          bytes: Buffer.byteLength(content, 'utf8'),
+          preview: content.slice(0, 240),
+          content,
+        })
+      } catch {
+        /* ignore one unreadable snapshot */
+      }
+    }
+    return entries
+  }
+
+  const readHistorySnapshot = async (target, snapshotId) => {
+    if (typeof snapshotId !== 'string' || !/^[0-9A-Za-z-]+\.md$/.test(snapshotId)) {
+      throw new Error('invalid history snapshot id')
+    }
+    const snapshotPath = path.join(historyDirFor(target), snapshotId)
+    return fsp.readFile(snapshotPath, 'utf8')
+  }
+
+  const restoreHistorySnapshot = async (workspaceId, filePath, snapshotId) => {
+    const target = await resolveTarget(workspaceId, filePath)
+    const content = await readHistorySnapshot(target, snapshotId)
+    const current = await readFileInfo(target)
+    if (current.exists) await archiveHistory(target, current.content)
+    await writeOrDeleteFile(target, content)
+    const info = await readFileInfo(target)
+    return {
+      target,
+      file: info,
+      entries: await listHistoryFor(target),
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Stale-write protection
+  // -------------------------------------------------------------------------
+  const checkBase = async (target, baseHash) => {
+    if (typeof baseHash !== 'string' || baseHash.length === 0) return null
+    const current = await readFileInfo(target)
+    if (current.exists !== true || current.hash !== baseHash) {
+      return {
+        stale: true,
+        current: {
+          exists: current.exists,
+          bytes: current.bytes,
+          mtime: current.mtime,
+          hash: current.hash,
+          content: current.content,
+        },
+      }
+    }
+    return null
+  }
+
+  const resolveTarget = async (workspaceId, filePath) => {
+    if (typeof filePath !== 'string' || filePath.length === 0) return globalPath
+    const workspace = resolveWorkspace(workspaceId)
+    if (workspace === undefined) throw new Error(`Unknown workspace: ${String(workspaceId)}`)
+    return assertChainFile(workspace.path, filePath)
+  }
+
+  const saveGlobal = async (content, baseHash) => {
+    const stale = await checkBase(globalPath, baseHash)
+    if (stale !== null) return stale
+    const current = await readFileInfo(globalPath)
+    if (current.exists) await archiveHistory(globalPath, current.content)
+    await writeOrDeleteFile(globalPath, content)
+    return { stale: false, global: await globalState() }
+  }
+
+  const saveProject = async (workspaceId, content, baseHash) => {
+    const workspace = resolveWorkspace(workspaceId)
+    if (workspace === undefined) throw new Error(`Unknown workspace: ${String(workspaceId)}`)
+    const state = await buildProjectState(workspace)
+    const stale = await checkBase(state.targetPath, baseHash)
+    if (stale !== null) return stale
+    const current = await readFileInfo(state.targetPath)
+    if (current.exists) await archiveHistory(state.targetPath, current.content)
+    await writeOrDeleteFile(state.targetPath, content)
+    return { stale: false, project: await buildProjectState(workspace, { full: true }) }
+  }
+
+  const saveInstructionFile = async (workspaceId, filePath, content, baseHash) => {
+    const workspace = resolveWorkspace(workspaceId)
+    if (workspace === undefined) throw new Error(`Unknown workspace: ${String(workspaceId)}`)
+    const target = await assertChainFile(workspace.path, filePath)
+    const stale = await checkBase(target, baseHash)
+    if (stale !== null) return stale
+    const current = await readFileInfo(target)
+    if (current.exists) await archiveHistory(target, current.content)
+    await writeOrDeleteFile(target, content)
+    const info = await readFileInfo(target)
+    return {
+      stale: false,
+      file: {
+        workspaceId: String(workspace.id),
+        filePath: target,
+        exists: info.exists,
+        bytes: info.bytes,
+        mtime: info.mtime,
+        hash: info.hash,
+        content: info.content,
+      },
+      project: await buildProjectState(workspace, { full: true }),
     }
   }
 
@@ -328,17 +553,20 @@ export function apply(ctx) {
     return buildProjectState(workspace, { full: true })
   }
 
-  const saveGlobal = async (content) => {
-    await writeOrDeleteFile(globalPath, content)
-    return globalState()
-  }
-
-  const saveProject = async (workspaceId, content) => {
+  const readInstructionFile = async (workspaceId, filePath) => {
     const workspace = resolveWorkspace(workspaceId)
     if (workspace === undefined) throw new Error(`Unknown workspace: ${String(workspaceId)}`)
-    const state = await buildProjectState(workspace)
-    await writeOrDeleteFile(state.targetPath, content)
-    return buildProjectState(workspace, { full: true })
+    const target = await assertChainFile(workspace.path, filePath)
+    const info = await readFileInfo(target)
+    return {
+      workspaceId: String(workspace.id),
+      filePath: target,
+      exists: info.exists,
+      bytes: info.bytes,
+      mtime: info.mtime,
+      hash: info.hash,
+      content: info.content,
+    }
   }
 
   /**
@@ -362,45 +590,14 @@ export function apply(ctx) {
     return target
   }
 
-  const readInstructionFile = async (workspaceId, filePath) => {
-    const workspace = resolveWorkspace(workspaceId)
-    if (workspace === undefined) throw new Error(`Unknown workspace: ${String(workspaceId)}`)
-    const target = await assertChainFile(workspace.path, filePath)
-    const info = await readFileInfo(target)
-    return {
-      workspaceId: String(workspace.id),
-      filePath: target,
-      exists: info.exists,
-      bytes: info.bytes,
-      mtime: info.mtime,
-      content: info.content,
-    }
+  const listHistory = async (workspaceId, filePath) => {
+    const target = await resolveTarget(workspaceId, filePath)
+    return { target, entries: await listHistoryFor(target) }
   }
 
-  const saveInstructionFile = async (workspaceId, filePath, content) => {
-    const workspace = resolveWorkspace(workspaceId)
-    if (workspace === undefined) throw new Error(`Unknown workspace: ${String(workspaceId)}`)
-    const target = await assertChainFile(workspace.path, filePath)
-    await writeOrDeleteFile(target, content)
-    const info = await readFileInfo(target)
-    return {
-      file: {
-        workspaceId: String(workspace.id),
-        filePath: target,
-        exists: info.exists,
-        bytes: info.bytes,
-        mtime: info.mtime,
-        content: info.content,
-      },
-      project: await buildProjectState(workspace, { full: true }),
-    }
-  }
-
-  /**
-   * Fold the durable `agent-instructions` messages of one live session into the
-   * currently injected instruction files. Best effort: a cold session simply
-   * reports found:false.
-   */
+  // -------------------------------------------------------------------------
+  // Session injection status
+  // -------------------------------------------------------------------------
   const collectSessionInjection = (session) => {
     const files = new Map()
     let messages = 0
@@ -477,6 +674,8 @@ export function apply(ctx) {
     readFile: readInstructionFile,
     saveFile: saveInstructionFile,
     getSessionStatus,
+    listHistory,
+    restoreHistory: restoreHistorySnapshot,
   }
 
   // Typert gateway binding: a plain ctx.provide() value is invisible to the
@@ -490,13 +689,31 @@ export function apply(ctx) {
     value: { service: api, serviceKey: 'instructions', namespace: 'instructions' },
   })
 
-  // The Typert face (./typert) routes remote.<namespace> calls to this service.
   ctx.provide('instructions', api)
 
   // -------------------------------------------------------------------------
   // Agent tool: read/edit the workspace instruction chain from conversation.
   // Global instructions stay user-only (the UI); the tool may read them.
   // -------------------------------------------------------------------------
+  const sandboxAllowsWrite = (agent, target) => {
+    try {
+      const policyService = ctx.get('sandboxPolicy')
+      if (policyService === undefined || typeof policyService.resolve !== 'function') return null
+      const session = getSession(String(agent?.id ?? ''))
+      const policy = policyService.resolve(session === undefined ? {} : { session })
+      if (policy === null || typeof policy !== 'object') return null
+      if (policy.mode === 'read-only') {
+        return 'The current session is in read-only sandbox mode; the agent cannot modify instruction files.'
+      }
+      if (policy.mode === 'workspace-write' && !insidePath(policy.workspaceRoot, target)) {
+        return `The target file is outside this session's workspace (${target}); workspace-write mode does not allow writing it.`
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
   const toolExecute = async (args, exec) => {
     const input = args !== null && typeof args === 'object' ? args : {}
     const action = typeof input.action === 'string' ? input.action : 'list'
@@ -545,7 +762,22 @@ export function apply(ctx) {
       const info = await readFileInfo(target)
       return { path: target, exists: info.exists, bytes: info.bytes, content: info.content }
     }
+    if (action === 'validate') {
+      if (typeof input.content !== 'string') throw new Error('content is required for validate')
+      const current = await readFileInfo(target)
+      return {
+        path: target,
+        exists: current.exists,
+        bytesBefore: current.bytes,
+        bytesAfter: Buffer.byteLength(input.content, 'utf8'),
+        changed: current.content !== input.content,
+        diff: simpleLineDiff(current.content, input.content),
+        note: 'Dry run only; nothing was written.',
+      }
+    }
     if (action === 'set' || action === 'append' || action === 'remove') {
+      const denial = sandboxAllowsWrite(exec?.agent, target)
+      if (denial !== null) throw new Error(denial)
       let next
       if (action === 'remove') {
         next = ''
@@ -560,6 +792,8 @@ export function apply(ctx) {
           next = input.content
         }
       }
+      const current = await readFileInfo(target)
+      if (current.exists) await archiveHistory(target, current.content)
       await writeOrDeleteFile(target, next)
       const info = await readFileInfo(target)
       return {
@@ -576,14 +810,15 @@ export function apply(ctx) {
   const toolDefinition = {
     name: 'instructions',
     description:
-      'Read and edit the workspace instruction chain (AGENTS.md files) that the built-in desktop injection engine loads. Use it to list the effective instruction files, read one file, or add/replace/remove project instruction text. Global instructions are user-managed: this tool can read them but only the user edits them in the Instruction panel.',
+      'Read and edit the workspace instruction chain (AGENTS.md files) that the built-in desktop injection engine loads. Use it to list the effective instruction files, read one file, validate a proposed change as a dry-run diff, or add/replace/remove project instruction text. Global instructions are user-managed: this tool can read them but only the user edits them in the Instruction panel. Writes follow the current session sandbox mode.',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['list', 'get', 'set', 'append', 'remove'],
-          description: 'list: effective chain; get: read a file; set/append/remove: edit a project instruction file.',
+          enum: ['list', 'get', 'validate', 'set', 'append', 'remove'],
+          description:
+            'list: effective chain; get: read a file; validate: dry-run diff of proposed content; set/append/remove: edit a project instruction file.',
         },
         scope: {
           type: 'string',
@@ -602,9 +837,7 @@ export function apply(ctx) {
     },
     output: {
       schema: { type: 'object', additionalProperties: true },
-      render: (args, value) => [
-        { type: 'text', text: JSON.stringify(value, null, 2).slice(0, 16000) },
-      ],
+      render: (args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2).slice(0, 16000) }],
     },
     execute: toolExecute,
     isConcurrencySafe: () => false,
@@ -641,8 +874,10 @@ export function apply(ctx) {
         }
       }
       const lines = [
-        `Instruction · 当前会话注入状态`,
-        `预设: ${status.preset ?? '未知'} · 引擎: ${status.engineActive === false ? '未启用' : '已启用'}`,
+        'Instruction · 当前会话注入状态',
+        `预设: ${status.preset ?? '未知'} · 引擎: ${
+          status.engineActive === false ? '未启用' : status.engineActive === true ? '已启用' : '未知'
+        }`,
         `项目: ${state.path}`,
         status.found
           ? `已注入: ${status.files.length} 个文件 · ${status.totalBytes} bytes · ${status.messages} 条注入消息`

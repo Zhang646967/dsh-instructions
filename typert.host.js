@@ -49,12 +49,14 @@ export const TYPERT = {
   invocations: [
     invocation('getState'),
     invocation('readProject', ['workspaceId']),
-    invocation('saveGlobal', ['content']),
-    invocation('saveProject', ['workspaceId', 'content']),
+    invocation('saveGlobal', ['content', 'baseHash']),
+    invocation('saveProject', ['workspaceId', 'content', 'baseHash']),
     invocation('findWorkspaceForSession', ['sessionId']),
     invocation('readFile', ['workspaceId', 'filePath']),
-    invocation('saveFile', ['workspaceId', 'filePath', 'content']),
+    invocation('saveFile', ['workspaceId', 'filePath', 'content', 'baseHash']),
     invocation('getSessionStatus', ['sessionId']),
+    invocation('listHistory', ['workspaceId', 'filePath']),
+    invocation('restoreHistory', ['workspaceId', 'filePath', 'snapshotId']),
   ],
   model: {
     services: [
@@ -76,12 +78,12 @@ export const TYPERT = {
           {
             kind: 'method',
             name: 'saveGlobal',
-            signature: 'saveGlobal(content: string): Promise<GlobalInstructions>',
+            signature: 'saveGlobal(content: string, baseHash?: string): Promise<SaveResult>',
           },
           {
             kind: 'method',
             name: 'saveProject',
-            signature: 'saveProject(workspaceId: string, content: string): Promise<ProjectInstructions>',
+            signature: 'saveProject(workspaceId: string, content: string, baseHash?: string): Promise<SaveResult>',
           },
           {
             kind: 'method',
@@ -97,12 +99,23 @@ export const TYPERT = {
             kind: 'method',
             name: 'saveFile',
             signature:
-              'saveFile(workspaceId: string, filePath: string, content: string): Promise<InstructionFileSave>',
+              'saveFile(workspaceId: string, filePath: string, content: string, baseHash?: string): Promise<SaveResult>',
           },
           {
             kind: 'method',
             name: 'getSessionStatus',
             signature: 'getSessionStatus(sessionId: string): Promise<SessionInstructionStatus>',
+          },
+          {
+            kind: 'method',
+            name: 'listHistory',
+            signature: 'listHistory(workspaceId: string, filePath: string): Promise<HistoryListing>',
+          },
+          {
+            kind: 'method',
+            name: 'restoreHistory',
+            signature:
+              'restoreHistory(workspaceId: string, filePath: string, snapshotId: string): Promise<HistoryRestore>',
           },
         ],
         types: [],
